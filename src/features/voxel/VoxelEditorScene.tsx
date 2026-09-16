@@ -1,59 +1,82 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import { Edges, OrbitControls } from '@react-three/drei'
 import { MOUSE, TOUCH, type InstancedMesh } from 'three'
-import { coordinateKey, type Coordinate, type EditMode, type VoxelModel } from './model'
-import { interpolateCoordinates, pickLockedTarget, pickStrokeStart, type StrokeTarget } from './targeting'
+import { coordinateKey, type BrushMode, type Coordinate, type EditMode, type Voxel, type VoxelModel } from './model'
+import { interpolateCoordinates, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview, type StrokeTarget } from './targeting'
 import { bindPrimaryPointerInput } from './input'
 import { VoxelMesh } from './VoxelMesh'
 
 interface SceneProps {
   model: VoxelModel
-  mode: EditMode
+  mode: EditMode | 'camera'
+  brushMode: BrushMode
+  color: string
   onStrokeStart: () => void
-  onStrokeEdit: (at: Coordinate) => void
+  onStrokeEdit: (at: Coordinate, mode?: EditMode, color?: string) => void
   onStrokeEnd: () => void
   onStrokeCancel: () => void
+  onRectangle: (cells: Coordinate[], mode: EditMode, color: string) => void
 }
 
-function EditorScene({ model, mode, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel }: SceneProps) {
+function EditorScene({ model, mode, brushMode, color, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel, onRectangle }: SceneProps) {
   const meshRef = useRef<InstancedMesh>(null)
+  const previewMeshRef = useRef<InstancedMesh>(null)
+  const [preview, setPreview] = useState<Voxel[]>([])
   const voxels = useMemo(() => [...model.values()], [model])
-  const latest = useRef({ voxels, mode, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel })
-  latest.current = { voxels, mode, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel }
-  const stroke = useRef<{ target: StrokeTarget; last: Coordinate; seen: Set<string>; begun: boolean } | null>(null)
+  const latest = useRef({ model, voxels, mode, brushMode, color, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel, onRectangle })
+  latest.current = { model, voxels, mode, brushMode, color, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel, onRectangle }
+  const stroke = useRef<{ target: StrokeTarget; last: Coordinate; seen: Set<string>; begun: boolean;
+    brushMode: BrushMode; mode: EditMode; color: string } | null>(null)
   const { gl, camera } = useThree()
 
   useEffect(() => bindPrimaryPointerInput(gl.domElement, {
     start: (x, y) => {
-      if (!meshRef.current) return false
+      const { brushMode, mode, color, model, voxels } = latest.current
+      if (mode === 'camera' || !meshRef.current) return false
       const target = pickStrokeStart(x, y, gl.domElement.getBoundingClientRect(), camera,
-        meshRef.current, latest.current.voxels, latest.current.mode)
+        meshRef.current, voxels, mode)
       if (!target) return false
-      stroke.current = { target, last: target.at, seen: new Set(), begun: false }
+      stroke.current = { target, last: target.at, seen: new Set(), begun: false, brushMode, mode, color }
+      if (brushMode === 'rectangle') setPreview(rectanglePreview(target.at, target.at, target.lockedAxis, model, mode, color))
       return true
     },
     move: (x, y) => {
       const active = stroke.current
       if (!active) return
-      const at = pickLockedTarget(x, y, gl.domElement.getBoundingClientRect(), camera, active.target)
+      const at = pickLockedTarget(x, y, gl.domElement.getBoundingClientRect(), camera, active.target,
+        active.brushMode === 'rectangle')
       if (!at) return
+      if (active.brushMode === 'rectangle') {
+        active.last = at
+        setPreview(rectanglePreview(active.target.at, at, active.target.lockedAxis,
+          latest.current.model, active.mode, active.color))
+        return
+      }
       if (!active.begun) { latest.current.onStrokeStart(); active.begun = true }
       for (const coordinate of [active.last, ...interpolateCoordinates(active.last, at)]) {
         const key = coordinateKey(coordinate)
-        if (!active.seen.has(key)) { active.seen.add(key); latest.current.onStrokeEdit(coordinate) }
+        if (!active.seen.has(key)) { active.seen.add(key); latest.current.onStrokeEdit(coordinate, active.mode, active.color) }
       }
       active.last = at
     },
-    end: () => {
+    end: (x, y) => {
       const active = stroke.current
       if (!active) return
-      if (!active.begun) { latest.current.onStrokeStart(); latest.current.onStrokeEdit(active.target.at) }
+      if (active.brushMode === 'rectangle') {
+        const at = pickLockedTarget(x, y, gl.domElement.getBoundingClientRect(), camera, active.target, true) ?? active.last
+        setPreview([])
+        latest.current.onRectangle(rectangleCoordinates(active.target.at, at, active.target.lockedAxis), active.mode, active.color)
+        stroke.current = null
+        return
+      }
+      if (!active.begun) { latest.current.onStrokeStart(); latest.current.onStrokeEdit(active.target.at, active.mode, active.color) }
       latest.current.onStrokeEnd()
       stroke.current = null
     },
     cancel: () => {
       if (stroke.current?.begun) latest.current.onStrokeCancel()
+      setPreview([])
       stroke.current = null
     },
   }), [camera, gl])
@@ -63,6 +86,7 @@ function EditorScene({ model, mode, onStrokeStart, onStrokeEdit, onStrokeEnd, on
     <ambientLight intensity={1.5} />
     <directionalLight position={[12, 22, 10]} intensity={2} />
     <VoxelMesh voxels={voxels} meshRef={meshRef} />
+    {preview.length > 0 && <VoxelMesh voxels={preview} meshRef={previewMeshRef} capacity={preview.length} opacity={0.5} />}
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.015, 0]}>
       <planeGeometry args={[16, 16]} />
       <meshLambertMaterial color="#d9d5c8" />
@@ -76,8 +100,8 @@ function EditorScene({ model, mode, onStrokeStart, onStrokeEdit, onStrokeEnd, on
     <OrbitControls makeDefault enablePan={false} enableDamping={false}
       target={[0, 5, 0]} minDistance={7} maxDistance={60}
       minPolarAngle={0.1} maxPolarAngle={Math.PI / 2 - 0.03}
-      mouseButtons={{ LEFT: -1 as MOUSE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }}
-      touches={{ ONE: -1 as TOUCH, TWO: TOUCH.DOLLY_ROTATE }} />
+      mouseButtons={{ LEFT: mode === 'camera' ? MOUSE.ROTATE : -1 as MOUSE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }}
+      touches={{ ONE: mode === 'camera' ? TOUCH.ROTATE : -1 as TOUCH, TWO: TOUCH.DOLLY_ROTATE }} />
   </>
 }
 

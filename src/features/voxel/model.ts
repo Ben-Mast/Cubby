@@ -4,6 +4,7 @@ export interface Voxel extends Coordinate { color: string }
 export interface VoxelData { version: 1; size: [16, 16, 16]; voxels: Voxel[] }
 export type VoxelModel = ReadonlyMap<string, Voxel>
 export type EditMode = 'add' | 'delete' | 'paint'
+export type BrushMode = 'stroke' | 'rectangle'
 export const coordinateKey = ({ x, y, z }: Coordinate) => `${x},${y},${z}`
 export const inBounds = ({ x, y, z }: Coordinate) =>
   [x, y, z].every(value => Number.isInteger(value) && value >= 0 && value < EDITOR_SIZE)
@@ -19,6 +20,22 @@ export function editModel(model: VoxelModel, mode: EditMode, at: Coordinate, col
   if (mode === 'delete') next.delete(key)
   else next.set(key, { x: at.x, y: at.y, z: at.z, color })
   return next
+}
+
+export function editRectangle(model: VoxelModel, mode: EditMode, cells: readonly Coordinate[], color: string): VoxelModel {
+  if (!validColor(color)) return model
+  let next: Map<string, Voxel> | null = null
+  for (const at of cells) {
+    if (!inBounds(at)) continue
+    const key = coordinateKey(at)
+    const existing = (next ?? model).get(key)
+    if ((mode === 'add' && existing) || (mode !== 'add' && !existing) ||
+        (mode === 'paint' && existing?.color === color)) continue
+    next ??= new Map(model)
+    if (mode === 'delete') next.delete(key)
+    else next.set(key, { ...at, color })
+  }
+  return next ?? model
 }
 
 export function serializeModel(model: VoxelModel): string {
@@ -52,6 +69,7 @@ export interface History {
   strokeBase: VoxelModel | null
 }
 export type HistoryAction = { type: 'edit' | 'stroke-edit'; mode: EditMode; at: Coordinate; color: string }
+  | { type: 'rectangle'; mode: EditMode; cells: Coordinate[]; color: string }
   | { type: 'stroke-start' | 'stroke-end' | 'stroke-cancel' }
   | { type: 'restore'; model: VoxelModel }
   | { type: 'undo' | 'redo' | 'clear' }
@@ -89,6 +107,7 @@ export function historyReducer(state: History, action: HistoryAction): History {
     return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: state.future[0], future: state.future.slice(1), strokeBase: null }
   }
   const next = action.type === 'edit' ? editModel(state.present, action.mode, action.at, action.color)
+    : action.type === 'rectangle' ? editRectangle(state.present, action.mode, action.cells, action.color)
     : action.type === 'restore' ? action.model : state.present.size ? new Map<string, Voxel>() : state.present
   if (next === state.present) return state
   return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: next, future: [], strokeBase: null }

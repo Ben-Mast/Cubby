@@ -337,7 +337,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
   }
 
   .immersive-shell .nav-link { min-height: 40px; padding: 0.4rem 0.55rem; }
-  .editor-topbar { gap: 0.3rem; }
+  .editor-topbar { flex-wrap: wrap; justify-content: flex-end; gap: 0.3rem; }
+  .editor-topbar .editor-name { min-width: 3rem; }
   .editor-topbar .status-pill { display: none; }
   .editor-topbar .editor-name input { min-height: 44px; padding: 0.45rem; }
   .immersive-page .scene { min-height: 0; height: auto; }

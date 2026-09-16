@@ -24,6 +24,7 @@ export function VoxelMesh({ voxels, meshRef, capacity = EDITOR_SIZE ** 3, opacit
   }, [voxels, meshRef, invalidate, capacity])
   return <instancedMesh ref={meshRef} args={[undefined, undefined, capacity]}>
     <boxGeometry args={[1, 1, 1]} />
-    <meshLambertMaterial transparent={opacity < 1} opacity={opacity} depthWrite={opacity === 1} />
+    <meshLambertMaterial transparent={opacity < 1} opacity={opacity} depthWrite={opacity === 1}
+      polygonOffset={opacity < 1} polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
   </instancedMesh>
 }

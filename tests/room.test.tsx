@@ -9,6 +9,7 @@ import { identities } from '../src/features/auth/identities'
 import { fetchSharedRoom } from '../src/features/room/data'
 import { reconstructRoomModel, roomTransform, type PlacedFurniture, type RoomRotation } from '../src/features/room/model'
 import { ROOM_WIDTH, ROOM_DEPTH, VOXEL_UNIT } from '../src/features/room/config'
+import { bindRoomPointerInput } from '../src/features/room/input'
 import { createFurniture, updateFurniture } from '../src/features/furniture/data'
 import { editModel, type VoxelData } from '../src/features/voxel/model'
 import { mock } from './mockSupabase'
@@ -95,4 +96,67 @@ test('room route omits the redundant home name, shows empty state, refreshes see
   assert.match(JSON.stringify(renderer.toJSON()), /Unable to load your shared room/)
   await act(async () => renderer.unmount())
   assert.equal(mock.listeners.size, 0)
+})
+
+test('room pointer gestures orbit by default, tap-select, drag only selected furniture, and deselect on empty tap', () => {
+  class TestCanvas extends EventTarget { setPointerCapture(_id: number) {} }
+  for (const pointerType of ['mouse', 'touch']) {
+    const canvas = new TestCanvas()
+    const events: string[] = []
+    let selectedId = ''
+    let placing = false
+    let cameraDrag = true
+    let itemPicks = 0
+    const unbind = bindRoomPointerInput(canvas as unknown as HTMLCanvasElement, {
+      pick: (x) => { itemPicks++; return { id: x < 50 ? 'chair' : null, position: { x: Math.floor(x / 10), z: 3 }, selectedId, placing } },
+      position: x => ({ x: Math.floor(x / 10), z: 3 }),
+      setCameraDrag: enabled => { cameraDrag = enabled },
+      select: id => { selectedId = id; events.push(`select:${id}`) },
+      startDrag: id => { events.push(`start:${id}`); return true },
+      drag: position => events.push(`drag:${position.x}`),
+      endDrag: position => events.push(`end:${position?.x}`),
+      cancelDrag: () => events.push('cancel'),
+    })
+    const send = (type: string, x: number, pointerId = 1) => canvas.dispatchEvent(Object.assign(new Event(type), {
+      pointerId, clientX: x, clientY: 20, button: 0, pointerType,
+    }))
+    send('pointerdown', 20); send('pointermove', 35); send('pointerup', 35)
+    assert.equal(cameraDrag, true)
+    assert.deepEqual(events, [], 'dragging an unselected item orbits without selecting it')
+    send('pointerdown', 20); send('pointerup', 20)
+    assert.equal(selectedId, 'chair')
+    send('pointerdown', 20); assert.equal(cameraDrag, false)
+    send('pointermove', 23); send('pointerup', 23)
+    assert.equal(events.some(value => value.startsWith('start:')), false, 'tap jitter does not move furniture')
+    const beforeDragPicks = itemPicks
+    send('pointerdown', 20); send('pointermove', 32); send('pointerup', 32)
+    assert.equal(itemPicks, beforeDragPicks + 1, 'moving only raycasts the floor, not every furniture mesh')
+    assert.ok(events.includes('start:chair'))
+    assert.ok(events.includes('drag:3'))
+    assert.ok(events.includes('end:3'))
+    assert.equal(cameraDrag, true)
+    send('pointerdown', 70); send('pointerup', 70)
+    assert.equal(selectedId, '')
+    const count = events.length
+    send('pointerdown', 70); send('pointermove', 90); send('pointerup', 90)
+    assert.equal(events.length, count, 'empty drag orbits without deselect side effects')
+    placing = true
+    send('pointerdown', 70); assert.equal(cameraDrag, false)
+    send('pointermove', 80); send('pointerup', 80)
+    assert.ok(events.includes('start:null'))
+    assert.ok(events.includes('end:8'))
+    placing = false
+    selectedId = 'chair'
+    send('pointerdown', 20); send('pointermove', 32)
+    if (pointerType === 'touch') {
+      send('pointerdown', 30, 2)
+      assert.equal(cameraDrag, true)
+      assert.equal(events.at(-1), 'cancel')
+      send('pointerup', 30, 2)
+    } else send('pointercancel', 32)
+    send('pointerup', 32)
+    const finalCount = events.length
+    unbind(); send('pointerdown', 20); send('pointerup', 20)
+    assert.equal(events.length, finalCount)
+  }
 })

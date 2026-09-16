@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { MOUSE, TOUCH, Vector3, type InstancedMesh, type PerspectiveCamera } from 'three'
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { EDITOR_SIZE } from '../voxel/model'
 import { VoxelMesh } from '../voxel/VoxelMesh'
-import { bindPrimaryPointerInput } from '../voxel/input'
 import { ROOM_DEPTH, ROOM_WIDTH, ROOM_WALL_HEIGHT, VOXEL_UNIT } from './config'
 import { roomTransform, type RoomInstance } from './model'
 import { placementBounds } from './placement'
-import { pickRoomItem, pickRoomPosition } from './input'
+import { bindRoomPointerInput, pickRoomItem, pickRoomPosition } from './input'
 
 function FitRoomCamera() {
   const { camera, size, invalidate } = useThree()
@@ -66,31 +66,41 @@ export interface SharedRoomSceneProps {
   onDragEnd?: (position: { x: number; z: number } | null) => void
   onDragCancel?: () => void
 }
-function RoomInput(props: Pick<SharedRoomSceneProps, 'disabled' | 'onSelect' | 'onDragStart' | 'onDrag' | 'onDragEnd' | 'onDragCancel'>) {
+function RoomInput(props: Pick<SharedRoomSceneProps, 'disabled' | 'selectedId' | 'preview' | 'onSelect' | 'onDragStart' | 'onDrag' | 'onDragEnd' | 'onDragCancel'> & {
+  controlsRef: React.RefObject<OrbitControlsImpl | null>
+}) {
   const { gl, camera, scene } = useThree()
   const latest = useRef(props)
   latest.current = props
-  useEffect(() => bindPrimaryPointerInput(gl.domElement, {
-    start: (x, y) => {
-      if (latest.current.disabled) return false
+  useEffect(() => bindRoomPointerInput(gl.domElement, {
+    pick: (x, y) => {
       const rect = gl.domElement.getBoundingClientRect()
       scene.updateMatrixWorld(true)
       const id = pickRoomItem(x, y, rect, camera, scene)
       const position = pickRoomPosition(x, y, rect, camera)
-      if (latest.current.onDragStart?.(id, position)) return true
-      latest.current.onSelect?.(id ?? '')
-      return false
+      return { id, position, selectedId: latest.current.selectedId,
+        placing: Boolean(latest.current.preview) && !latest.current.disabled }
     },
-    move: (x, y) => {
-      const at = pickRoomPosition(x, y, gl.domElement.getBoundingClientRect(), camera)
-      if (at) latest.current.onDrag?.(at)
+    position: (x, y) => pickRoomPosition(x, y, gl.domElement.getBoundingClientRect(), camera),
+    setCameraDrag: enabled => {
+      const controls = latest.current.controlsRef.current
+      if (controls) {
+        controls.mouseButtons.LEFT = enabled ? MOUSE.ROTATE : -1 as MOUSE
+        controls.touches.ONE = enabled ? TOUCH.ROTATE : -1 as TOUCH
+      }
     },
-    end: (x, y) => latest.current.onDragEnd?.(pickRoomPosition(x, y, gl.domElement.getBoundingClientRect(), camera)),
-    cancel: () => latest.current.onDragCancel?.(),
+    select: id => { if (!latest.current.disabled) latest.current.onSelect?.(id) },
+    startDrag: (id, position) => latest.current.onDragStart?.(id, position) ?? false,
+    drag: position => latest.current.onDrag?.(position),
+    endDrag: position => latest.current.onDragEnd?.(position),
+    cancelDrag: () => latest.current.onDragCancel?.(),
   }), [camera, gl, scene])
   return null
 }
 export function SharedRoomScene({ instances, selectedId, preview, previewInvalid = false, ...input }: SharedRoomSceneProps) {
+  const controlsRef = useRef<OrbitControlsImpl>(null)
+  const mouseButtons = useMemo(() => ({ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }), [])
+  const touches = useMemo(() => ({ ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_ROTATE }), [])
   return <div className="scene room-scene" aria-label="Shared 3D room with floor grid and furniture">
     <Canvas camera={{ position: [15, 14, 15], fov: 45, near: 0.1, far: 120 }} dpr={[1, 1.5]}
       frameloop="demand" gl={{ antialias: true }} onCreated={({ camera }) => camera.lookAt(0, 1, 0)}>
@@ -99,7 +109,7 @@ export function SharedRoomScene({ instances, selectedId, preview, previewInvalid
       <ambientLight intensity={1.5} /><directionalLight position={[10, 15, 8]} intensity={2} />
       <mesh position={[0, -0.1, 0]}><boxGeometry args={[ROOM_WIDTH, 0.2, ROOM_DEPTH]} /><meshLambertMaterial color="#d9d5c8" /></mesh>
       <FloorGrid />
-      <RoomInput {...input} />
+      <RoomInput {...input} selectedId={selectedId} preview={preview} controlsRef={controlsRef} />
       <mesh position={[0, ROOM_WALL_HEIGHT / 2, -ROOM_DEPTH / 2 - 0.075]}>
         <boxGeometry args={[ROOM_WIDTH, ROOM_WALL_HEIGHT, 0.15]} /><meshLambertMaterial color="#b9b1da" transparent opacity={0.4} depthWrite={false} /></mesh>
       <mesh position={[-ROOM_WIDTH / 2 - 0.075, ROOM_WALL_HEIGHT / 2, 0]}>
@@ -108,10 +118,9 @@ export function SharedRoomScene({ instances, selectedId, preview, previewInvalid
       {instances.filter(instance => instance.placement.id === selectedId).map(instance => <Footprint key={instance.placement.id} instance={instance} color="#5b4bdb" />)}
       {preview && <><PlacedVoxelModel instance={preview} opacity={0.65} />
         <Footprint instance={preview} color={previewInvalid ? '#c3304b' : '#13834b'} /></>}
-      <OrbitControls makeDefault enablePan={false} enableDamping={false} target={[0, 1, 0]}
+      <OrbitControls ref={controlsRef} makeDefault enablePan={false} enableDamping={false} target={[0, 1, 0]}
         minDistance={4} maxDistance={80} minPolarAngle={0.15} maxPolarAngle={Math.PI / 2 - 0.03}
-        mouseButtons={{ LEFT: -1 as MOUSE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }}
-        touches={{ ONE: -1 as TOUCH, TWO: TOUCH.DOLLY_ROTATE }} />
+        mouseButtons={mouseButtons} touches={touches} />
     </Canvas>
   </div>
 }
