@@ -5,7 +5,6 @@ import { FurniturePage } from '../routes/FurniturePage'
 import { LoginPage } from '../routes/LoginPage'
 import { NotFoundPage } from '../routes/NotFoundPage'
 import { RoomPage } from '../routes/RoomPage'
-import { SettingsPage } from '../routes/SettingsPage'
 import { LoginRoute, ProtectedRoutes } from '../features/auth/AuthRoutes'
 
 export function App() {
@@ -21,7 +20,7 @@ export function App() {
           <Route path="/furniture" element={<FurniturePage />} />
           <Route path="/furniture/new" element={<FurnitureEditorPage />} />
           <Route path="/furniture/:id/edit" element={<FurnitureEditorPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<Navigate to="/room" replace />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

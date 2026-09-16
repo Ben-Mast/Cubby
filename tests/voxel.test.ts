@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, PerspectiveCamera, Vector3 } from 'three'
+import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, PerspectiveCamera, Plane, Vector3 } from 'three'
 import { coordinateKey, deserializeModel, editModel, emptyHistory, historyReducer, HISTORY_LIMIT, inBounds, serializeModel, type VoxelModel } from '../src/features/voxel/model'
-import { EditGesture, faceTarget, floorTarget, pickTarget } from '../src/features/voxel/targeting'
-import { bindEditInput } from '../src/features/voxel/input'
+import { faceTarget, floorTarget, interpolateCoordinates, pickLockedTarget, pickStrokeStart } from '../src/features/voxel/targeting'
+import { bindPrimaryPointerInput } from '../src/features/voxel/input'
 
 const at = { x: 8, y: 0, z: 8 }
 const brown = '#8b5e3c'
@@ -54,14 +54,16 @@ test('actual Three raycast picks instance faces and floor, not empty air', () =>
   mesh.updateMatrixWorld()
   const rect = { left: 0, top: 0, width: 500, height: 500 } as DOMRect
   const voxels = [{ ...at, color: brown }]
-  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'add'), { ...at, y: 1 })
-  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'delete'), at)
-  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'paint'), at)
+  const add = pickStrokeStart(250, 250, rect, camera, mesh, voxels, 'add')
+  assert.deepEqual(add?.at, { ...at, y: 1 })
+  assert.equal(add?.lockedAxis, 'y')
+  assert.deepEqual(pickStrokeStart(250, 250, rect, camera, mesh, voxels, 'delete')?.at, at)
+  assert.deepEqual(pickStrokeStart(250, 250, rect, camera, mesh, voxels, 'paint')?.at, at)
   mesh.count = 0; mesh.computeBoundingSphere()
-  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, [], 'add'), at)
-  assert.equal(pickTarget(250, 250, rect, camera, mesh, [], 'paint'), null)
+  assert.deepEqual(pickStrokeStart(250, 250, rect, camera, mesh, [], 'add')?.at, at)
+  assert.equal(pickStrokeStart(250, 250, rect, camera, mesh, [], 'paint'), null)
   camera.position.set(0, 30, 30); camera.lookAt(new Vector3(30, 30, 30)); camera.updateMatrixWorld()
-  assert.equal(pickTarget(250, 250, rect, camera, mesh, [], 'add'), null)
+  assert.equal(pickStrokeStart(250, 250, rect, camera, mesh, [], 'add'), null)
   mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose()
 })
 test('undo/redo covers add, paint, delete, clear and restore; edits branch history', () => {
@@ -113,39 +115,49 @@ test('deserialization rejects invalid format, colors, out-of-bounds and duplicat
       [{ ...voxel, color: 'red' }], [null]].map(voxels => ({ version: 1, size: [16,16,16], voxels }))])
     assert.throws(() => deserializeModel(JSON.stringify(data)))
 })
-test('mouse and touch-style pointer taps edit, drags and multi-touch never edit', () => {
-  for (const id of [1, 123]) {
-    const gesture = new EditGesture()
-    gesture.down(id, 20, 30, 0)
-    assert.equal(gesture.up(id, 22, 31), true)
-    gesture.down(id, 20, 30, 0); gesture.move(id, 40, 30)
-    assert.equal(gesture.up(id, 20, 30), false)
-    gesture.down(id, 20, 30, 2); assert.equal(gesture.up(id, 20, 30), false)
-    gesture.down(id, 20, 30, 0); gesture.cancel(id); assert.equal(gesture.up(id, 20, 30), false)
-    gesture.down(id, 20, 30, 0); gesture.down(id + 1, 25, 30, 0)
-    assert.equal(gesture.up(id + 1, 25, 30), false)
-    assert.equal(gesture.up(id, 20, 30), false)
-  }
+test('stroke interpolation fills fast pointer samples and locked raycasts stay in one plane', () => {
+  assert.deepEqual(interpolateCoordinates({ x: 1,y: 2,z: 3 }, { x: 5,y: 2,z: 3 }), [
+    { x: 2,y: 2,z: 3 }, { x: 3,y: 2,z: 3 }, { x: 4,y: 2,z: 3 }, { x: 5,y: 2,z: 3 },
+  ])
+  const camera = new PerspectiveCamera(45, 1, 0.1, 150)
+  camera.position.set(8, 10, 8); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+  const target = { at: { x: 8,y: 4,z: 8 }, lockedAxis: 'y' as const, lockedValue: 4,
+    plane: new Plane(new Vector3(0,1,0), -4) }
+  assert.equal(pickLockedTarget(250, 250, { left: 0,top: 0,width: 500,height: 500 } as DOMRect, camera, target)?.y, 4)
 })
 
-test('actual pointer listeners accept mouse/touch, cancel conflicts and clean up', () => {
+test('one pointer edits continuously, second touch cancels for camera, and listeners clean up', () => {
   class TestCanvas extends EventTarget { setPointerCapture(_id: number) {} }
   for (const pointerType of ['mouse', 'touch']) {
     const canvas = new TestCanvas()
-    const edits: number[][] = []
-    const unbind = bindEditInput(canvas as unknown as HTMLCanvasElement, (x, y) => edits.push([x, y]))
+    const events: string[] = []
+    const unbind = bindPrimaryPointerInput(canvas as unknown as HTMLCanvasElement, {
+      start: () => { events.push('start'); return true }, move: () => events.push('move'),
+      end: () => events.push('end'), cancel: () => events.push('cancel'),
+    })
     const send = (type: string, pointerId = 1, clientX = 100, clientY = 200) => {
       const event = Object.assign(new Event(type), { pointerId, clientX, clientY, button: 0, pointerType })
       canvas.dispatchEvent(event)
     }
-    send('pointerdown'); send('pointerup')
-    assert.deepEqual(edits, [[100, 200]])
     send('pointerdown'); send('pointermove', 1, 150); send('pointerup')
-    send('pointerdown'); send('pointercancel'); send('pointerup')
-    send('pointerdown'); send('lostpointercapture'); send('pointerup')
+    assert.deepEqual(events, ['start','move','end'])
     send('pointerdown'); send('pointerdown', 2); send('pointerup', 2); send('pointerup')
-    assert.equal(edits.length, 1)
+    assert.deepEqual(events.slice(-2), pointerType === 'touch' ? ['start','cancel'] : ['start','end'])
+    send('pointerdown'); send('pointercancel'); send('pointerup')
+    assert.equal(events.at(-1), 'cancel')
+    const count = events.length
     unbind(); send('pointerdown'); send('pointerup')
-    assert.equal(edits.length, 1)
+    assert.equal(events.length, count)
   }
+})
+
+test('one continuous stroke is one undo/redo history entry', () => {
+  let state = emptyHistory()
+  state = historyReducer(state, { type: 'stroke-start' })
+  for (const x of [1,2,3,4]) state = historyReducer(state, { type: 'stroke-edit', mode: 'add', at: { x,y: 0,z: 0 }, color: brown })
+  state = historyReducer(state, { type: 'stroke-end' })
+  assert.equal(state.present.size, 4)
+  assert.equal(state.past.length, 1)
+  state = historyReducer(state, { type: 'undo' }); assert.equal(state.present.size, 0)
+  state = historyReducer(state, { type: 'redo' }); assert.equal(state.present.size, 4)
 })

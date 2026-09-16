@@ -1,4 +1,5 @@
 import { Navigate, Outlet } from 'react-router-dom'
+import { RefreshCw } from 'lucide-react'
 import { useAuth } from './AuthProvider'
 
 function SessionStatus() {
@@ -9,7 +10,7 @@ function SessionStatus() {
         <h1>{loading ? 'Opening your home…' : 'Session unavailable'}</h1>
         {initializationError && <>
           <p role="alert">{initializationError}</p>
-          <button className="button-link" onClick={retryInitialization}>Try again</button>
+          <button className="icon-button primary-icon" aria-label="Retry session" title="Retry" onClick={retryInitialization}><RefreshCw aria-hidden="true" /></button>
         </>}
       </section>
     </main>

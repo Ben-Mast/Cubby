@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { ArrowLeft, LogIn } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthProvider'
 import { identities } from '../features/auth/identities'
 import type { Identity } from '../features/auth/identities'
@@ -29,10 +30,9 @@ export function LoginPage() {
   return (
     <main className="standalone-page">
       <section className="placeholder-card">
-        <p className="eyebrow">Cubby</p>
-        <h1>{selectedIdentity ? `Welcome home, ${selectedIdentity.displayName}` : 'Who are you?'}</h1>
+        <div className="login-mark" aria-label="Cubby">C</div>
         {!selectedIdentity ? (
-          <div className="identity-picker">
+          <div className="identity-picker" aria-label="Choose identity">
             {identities.map((identity) => (
               <button className="identity-choice" key={identity.id} onClick={() => setSelectedIdentity(identity)}>
                 <span aria-hidden="true">{identity.emoji}</span>
@@ -42,18 +42,20 @@ export function LoginPage() {
           </div>
         ) : (
           <form className="auth-form" onSubmit={handleSubmit}>
-            <label htmlFor="password">Password</label>
-            <input id="password" type="password" autoComplete="current-password" autoFocus required
+            <strong className="selected-identity">{selectedIdentity.displayName}</strong>
+            <label className="sr-only" htmlFor="password">Password</label>
+            <input id="password" type="password" placeholder="Password" autoComplete="current-password" autoFocus required
               value={password} disabled={submitting} onChange={(event) => setPassword(event.target.value)} />
             {error && <p className="auth-error" role="alert">{error}</p>}
-            <button className="button-link" type="submit" disabled={submitting || !password}>
-              {submitting ? 'Signing in…' : 'Log in'}
+            <button className="icon-button primary-icon" aria-label={submitting ? 'Signing in' : 'Log in'} title="Log in"
+              type="submit" disabled={submitting || !password}>
+              <LogIn aria-hidden="true" />
             </button>
-            <button className="text-button" type="button" disabled={submitting} onClick={() => {
+            <button className="icon-button" aria-label="Choose a different identity" title="Back" type="button" disabled={submitting} onClick={() => {
               setSelectedIdentity(null)
               setPassword('')
               setError(null)
-            }}>Choose a different identity</button>
+            }}><ArrowLeft aria-hidden="true" /></button>
           </form>
         )}
       </section>

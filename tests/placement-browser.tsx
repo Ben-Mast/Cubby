@@ -41,8 +41,9 @@ function Harness() {
   return <MemoryRouter><main className="app-main"><h1>Room placement test</h1>
     <button className="text-button" onClick={() => setPicked({ ...design })}>Place test chair</button>
     <p role="status">{saved}; {instances.length} saved fixture items. No Supabase writes.</p>
-    <RoomWorkspace room={{ home: { id: 'test',name: 'Test',created_at: '' },instances,warnings: [] }} design={picked}
-      refresh={() => {}} clearDesign={() => setPicked(null)} actions={actions} />
+    <RoomWorkspace room={{ home: { id: 'test',name: 'Test',created_at: '' },instances,
+      furniture: [{ id: design.id,home_id: 'test',creator_id: 'test',name: design.name,created_at: '',updated_at: '',creator: { display_name: 'Tester' } }],warnings: [] }} design={picked}
+      refresh={() => {}} clearDesign={() => setPicked(null)} chooseFurniture={() => setPicked({ ...design })} actions={actions} />
   </main></MemoryRouter>
 }
 createRoot(document.getElementById('root')!).render(<Harness />)

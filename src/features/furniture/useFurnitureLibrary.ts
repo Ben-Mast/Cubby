@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthProvider'
 import { fetchCurrentHome } from '../home/currentHome'
 import { createRefetchCoordinator, reconcileById, subscribeToHomeChanges } from '../../lib/supabase/realtime'
@@ -10,6 +10,7 @@ export function useFurnitureLibrary() {
   const [error, setError] = useState('')
   const [syncError, setSyncError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const refresh = useCallback(() => setAttempt(value => value + 1), [])
   useEffect(() => {
     let active = true
     let hasSnapshot = false
@@ -44,5 +45,5 @@ export function useFurnitureLibrary() {
     })
     return () => { active = false; cleanup() }
   }, [identity?.id, attempt])
-  return { items, loading, error, syncError, refresh: () => setAttempt(value => value + 1) }
+  return { items, loading, error, syncError, refresh }
 }

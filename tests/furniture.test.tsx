@@ -14,7 +14,11 @@ import { editModel, serializeModel } from '../src/features/voxel/model'
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const model = editModel(new Map(), 'add', { x: 5, y: 0, z: 5 }, '#8b5e3c')
 const signIn = (index: number) => { mock.session = { user: { id: index ? 'user-two' : 'user-one', email: identities[index].email } } }
-const button = (renderer: any, label: string) => renderer.root.findAllByType('button').find((node: any) => node.children.includes(label))
+const button = (renderer: any, label: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === label)
+const edit = async (renderer: any, at: { x: number; y: number; z: number }) => act(async () => {
+  const scene = renderer.root.findByType(VoxelEditorScene).props
+  scene.onStrokeStart(); scene.onStrokeEdit(at); scene.onStrokeEnd()
+})
 async function mount(path: string) {
   let renderer: any
   await act(async () => { renderer = create(<MemoryRouter initialEntries={[path]}><AuthProvider><App /></AuthProvider></MemoryRouter>) })
@@ -73,7 +77,7 @@ test('saved editor loads name/model; save changes updates record and returns to 
   await act(async () => button(renderer, 'Save changes').props.onClick())
   assert.equal(mock.furniture.get(row.id).name, 'Updated chair')
   assert.equal(mock.furniture.size, 1)
-  assert.match(JSON.stringify(renderer.toJSON()), /Shared furniture library/)
+  assert.match(JSON.stringify(renderer.toJSON()), /Furniture/)
   await act(async () => renderer.unmount())
 })
 test('library shows creator, cancel is safe, changed count renews warning, confirm deletes', async () => {
@@ -82,10 +86,10 @@ test('library shows creator, cancel is safe, changed count renews warning, confi
   signIn(1)
   const renderer = await mount('/furniture')
   assert.match(JSON.stringify(renderer.toJSON()), /Created by.*Ben/)
-  await act(async () => button(renderer, 'Delete').props.onClick())
+  await act(async () => button(renderer, 'Delete Chair').props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /also remove 2 placed copies/)
-  await act(async () => button(renderer, 'Cancel').props.onClick()); assert.equal(mock.furniture.size, 1)
-  await act(async () => button(renderer, 'Delete').props.onClick())
+  await act(async () => button(renderer, 'Cancel delete').props.onClick()); assert.equal(mock.furniture.size, 1)
+  await act(async () => button(renderer, 'Delete Chair').props.onClick())
   mock.placedCounts.set(row.id, 3)
   await act(async () => button(renderer, 'Confirm delete').props.onClick()); assert.equal(mock.furniture.size, 1)
   assert.match(JSON.stringify(renderer.toJSON()), /also remove 3 placed copies/)
@@ -105,7 +109,7 @@ test('new editor validates before save; duplicate clicks blocked; errors retain 
   await act(async () => button(renderer, 'Save furniture').props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /Add at least one voxel/)
   const scene = () => renderer.root.findByType(VoxelEditorScene).props
-  await act(async () => scene().onEdit({ x: 5, y: 0, z: 5 }))
+  await edit(renderer, { x: 5, y: 0, z: 5 })
   const saveButton = button(renderer, 'Save furniture')
   await act(async () => { void saveButton.props.onClick(); void saveButton.props.onClick() })
   assert.equal(calls, 1); assert.equal(renderer.root.findByType('fieldset').props.disabled, true)
@@ -119,7 +123,7 @@ test('new-route save persists through component restart and second-user library 
   const renderer = await mount('/furniture/new')
   const input = renderer.root.findAllByType('input').find((node: any) => node.props.placeholder)
   await act(async () => input.props.onChange({ target: { value: 'Saved chair' } }))
-  await act(async () => renderer.root.findByType(VoxelEditorScene).props.onEdit({ x: 5, y: 0, z: 5 }))
+  await edit(renderer, { x: 5, y: 0, z: 5 })
   await act(async () => button(renderer, 'Save furniture').props.onClick())
   assert.equal(mock.furniture.size, 1)
   assert.match(JSON.stringify(renderer.toJSON()), /Saved chair/)
@@ -136,20 +140,20 @@ test('library refresh discovers external changes; load/count/delete errors are v
   const renderer = await mount('/furniture')
   assert.match(JSON.stringify(renderer.toJSON()), /No furniture yet/)
   const row = await createFurniture('Later chair', model)
-  await act(async () => button(renderer, 'Refresh library').props.onClick())
+  await act(async () => button(renderer, 'Refresh furniture').props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /Later chair/)
   mock.countError = { message: 'Offline' }
-  await act(async () => button(renderer, 'Delete').props.onClick())
+  await act(async () => button(renderer, 'Delete Later chair').props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /Deletion has not started/)
   assert.equal(renderer.root.findAllByProps({ role: 'dialog' }).length, 0)
   mock.countError = null
-  await act(async () => button(renderer, 'Delete').props.onClick())
+  await act(async () => button(renderer, 'Delete Later chair').props.onClick())
   mock.furnitureError = { message: 'Permission denied' }
   await act(async () => button(renderer, 'Confirm delete').props.onClick())
   assert.equal(mock.furniture.has(row.id), true)
   assert.match(JSON.stringify(renderer.toJSON()), /Unable to delete furniture/)
-  await act(async () => button(renderer, 'Cancel').props.onClick())
-  await act(async () => button(renderer, 'Refresh library').props.onClick())
+  await act(async () => button(renderer, 'Cancel delete').props.onClick())
+  await act(async () => button(renderer, 'Refresh furniture').props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /Unable to load furniture/)
   await act(async () => renderer.unmount())
 })

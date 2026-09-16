@@ -45,7 +45,7 @@ test('every protected route redirects logged-out users; no signup route exists',
   await dispose(renderer)
 })
 
-test('both identities map to hidden emails, sign in, show identity, and log out', async () => {
+test('both identities map to hidden emails, sign in, and log out from primary navigation', async () => {
   for (const identity of identities) {
     mock.reset()
     const renderer = await mount('/login')
@@ -59,9 +59,9 @@ test('both identities map to hidden emails, sign in, show identity, and log out'
     assert.equal(auth.identity?.id, identity.id)
     assert.deepEqual(mock.loginCalls, [{ email: identity.email, password: 'test-only-input' }])
     await act(async () => renderer.update(<MemoryRouter initialEntries={['/settings']} key="settings"><AuthProvider><Probe /><App /></AuthProvider></MemoryRouter>))
-    assert.match(JSON.stringify(renderer.toJSON()), new RegExp(identity.displayName))
+    assert.equal(location, '/room')
     assert.ok(!JSON.stringify(renderer.toJSON()).includes(identity.email))
-    await act(async () => renderer.root.findByType('button').props.onClick())
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Log out' }).props.onClick())
     assert.equal(location, '/login')
     assert.equal(auth.identity, null)
     assert.equal(mock.session, null)
@@ -137,11 +137,11 @@ test('restoration error permits retry; logout failure preserves session', async 
   assert.match(JSON.stringify(renderer.toJSON()), /Session unavailable/)
   mock.restoreError = null
   mock.session = { user: { email: identities[0].email } }
-  await act(async () => renderer.root.findByType('button').props.onClick())
-  assert.equal(location, '/settings')
+  await act(async () => renderer.root.findByProps({ 'aria-label': 'Retry session' }).props.onClick())
+  assert.equal(location, '/room')
   mock.logoutError = new Error('test logout failure')
-  await act(async () => renderer.root.findByType('button').props.onClick())
-  assert.equal(location, '/settings')
+  await act(async () => renderer.root.findByProps({ 'aria-label': 'Log out' }).props.onClick())
+  assert.equal(location, '/room')
   assert.equal(auth.identity?.id, identities[0].id)
   assert.match(JSON.stringify(renderer.toJSON()), /Unable to log out/)
   await dispose(renderer)

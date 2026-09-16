@@ -25,6 +25,8 @@ test('production routes, Cloudflare SPA fallback, mobile targets and env contrac
   for (const route of ['/', '/login', '/room', '/furniture', '/furniture/new', '/furniture/:id/edit', '/settings']) {
     assert.match(app, new RegExp(`path=["']${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`))
   }
+  assert.match(app, /path="\/settings" element={<Navigate to="\/room" replace/)
+  assert.equal(existsSync('src/routes/SettingsPage.tsx'), false)
   assert.match(text('src/main.tsx'), /BrowserRouter/)
   assert.equal(existsSync('public/404.html'), false)
   assert.equal(existsSync('functions'), false)

@@ -45,22 +45,51 @@ export function deserializeModel(json: string): VoxelModel {
   return model
 }
 
-export interface History { past: VoxelModel[]; present: VoxelModel; future: VoxelModel[] }
-export type HistoryAction = { type: 'edit'; mode: EditMode; at: Coordinate; color: string }
-  | { type: 'restore'; model: VoxelModel } | { type: 'undo' | 'redo' | 'clear' }
+export interface History {
+  past: VoxelModel[]
+  present: VoxelModel
+  future: VoxelModel[]
+  strokeBase: VoxelModel | null
+}
+export type HistoryAction = { type: 'edit' | 'stroke-edit'; mode: EditMode; at: Coordinate; color: string }
+  | { type: 'stroke-start' | 'stroke-end' | 'stroke-cancel' }
+  | { type: 'restore'; model: VoxelModel }
+  | { type: 'undo' | 'redo' | 'clear' }
 export const HISTORY_LIMIT = 100
-export const emptyHistory = (): History => ({ past: [], present: new Map(), future: [] })
+export const emptyHistory = (): History => ({ past: [], present: new Map(), future: [], strokeBase: null })
 export function historyReducer(state: History, action: HistoryAction): History {
+  if (action.type === 'stroke-start') {
+    if (state.strokeBase) return state
+    return { ...state, strokeBase: state.present }
+  }
+  if (action.type === 'stroke-edit') {
+    if (!state.strokeBase) return state
+    return { ...state, present: editModel(state.present, action.mode, action.at, action.color) }
+  }
+  if (action.type === 'stroke-cancel') {
+    if (!state.strokeBase) return state
+    return { ...state, present: state.strokeBase, strokeBase: null }
+  }
+  if (action.type === 'stroke-end') {
+    if (!state.strokeBase) return state
+    if (state.strokeBase === state.present) return { ...state, strokeBase: null }
+    return {
+      past: [...state.past, state.strokeBase].slice(-HISTORY_LIMIT),
+      present: state.present,
+      future: [],
+      strokeBase: null,
+    }
+  }
   if (action.type === 'undo') {
-    if (!state.past.length) return state
-    return { past: state.past.slice(0, -1), present: state.past[state.past.length - 1], future: [state.present, ...state.future] }
+    if (state.strokeBase || !state.past.length) return state
+    return { past: state.past.slice(0, -1), present: state.past[state.past.length - 1], future: [state.present, ...state.future], strokeBase: null }
   }
   if (action.type === 'redo') {
-    if (!state.future.length) return state
-    return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: state.future[0], future: state.future.slice(1) }
+    if (state.strokeBase || !state.future.length) return state
+    return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: state.future[0], future: state.future.slice(1), strokeBase: null }
   }
   const next = action.type === 'edit' ? editModel(state.present, action.mode, action.at, action.color)
     : action.type === 'restore' ? action.model : state.present.size ? new Map<string, Voxel>() : state.present
   if (next === state.present) return state
-  return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: next, future: [] }
+  return { past: [...state.past, state.present].slice(-HISTORY_LIMIT), present: next, future: [], strokeBase: null }
 }

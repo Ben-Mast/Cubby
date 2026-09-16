@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, Database, Eraser, Paintbrush, Plus, Redo2, RotateCcw, Save, Trash2, Undo2, X } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthProvider'
 import { createFurniture, getFurniture, updateFurniture, validateFurniture, type FurnitureRecord } from '../features/furniture/data'
 import { deserializeModel, emptyHistory, historyReducer, serializeModel, type Coordinate, type EditMode, type VoxelModel } from '../features/voxel/model'
 import { VoxelEditorScene } from '../features/voxel/VoxelEditorScene'
 
 const palette = ['#8b5e3c', '#d6a66a', '#5b4bdb', '#e781a0', '#3c9b78', '#488ec7', '#f1cc58', '#ffffff', '#34323c']
+const tools = [
+  { mode: 'add' as const, label: 'Add voxel', Icon: Plus },
+  { mode: 'delete' as const, label: 'Delete voxel', Icon: Eraser },
+  { mode: 'paint' as const, label: 'Paint voxel', Icon: Paintbrush },
+]
 export function FurnitureEditorPage() {
   const { id } = useParams()
   const { identity } = useAuth()
@@ -29,7 +35,9 @@ function FurnitureEditorLoader({ id }: { id?: string }) {
     return () => { current = false }
   }, [id, attempt])
   if (loading) return <p role="status">Loading furniture…</p>
-  if (error) return <section><p role="alert" className="auth-error">{error}</p><button onClick={() => setAttempt(value => value + 1)}>Retry</button> <Link to="/furniture">Back to library</Link></section>
+  if (error) return <section><p role="alert" className="auth-error">{error}</p><div className="icon-actions">
+    <button className="icon-button" aria-label="Retry" title="Retry" onClick={() => setAttempt(value => value + 1)}><RotateCcw aria-hidden="true" /></button>
+    <Link className="icon-button" aria-label="Back to furniture" title="Back" to="/furniture"><ArrowLeft aria-hidden="true" /></Link></div></section>
   return <LocalVoxelEditor initialName={record?.name} initialModel={record ? deserializeModel(JSON.stringify(record.voxel_data)) : undefined}
     existing={Boolean(id)} onSave={async (name, model) => {
       if (id) await updateFurniture(id, name, model)
@@ -44,15 +52,15 @@ export function LocalVoxelEditor({ existing = false, initialName = '', initialMo
 }) {
   const [history, dispatch] = useReducer(historyReducer, undefined, () => ({ ...emptyHistory(), present: initialModel ?? new Map() }))
   const [mode, setMode] = useState<EditMode>('add')
-  const [cameraMode, setCameraMode] = useState(false)
   const [color, setColor] = useState(palette[0])
+  const [colorsOpen, setColorsOpen] = useState(false)
   const [name, setName] = useState(initialName)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const lock = useRef(false)
   const active = useRef(true)
   useEffect(() => { active.current = true; return () => { active.current = false } }, [])
-  const onEdit = useCallback((at: Coordinate) => { if (!saving) dispatch({ type: 'edit', mode, at, color }) }, [mode, color, saving])
+  const onStrokeEdit = useCallback((at: Coordinate) => { if (!saving) dispatch({ type: 'stroke-edit', mode, at, color }) }, [mode, color, saving])
   async function save() {
     if (!onSave || lock.current) return
     lock.current = true; setSaveError('')
@@ -63,33 +71,37 @@ export function LocalVoxelEditor({ existing = false, initialName = '', initialMo
     } catch (reason) { if (active.current) setSaveError(reason instanceof Error ? reason.message : 'Unable to save furniture.') }
     finally { lock.current = false; if (active.current) setSaving(false) }
   }
-  return <section className="page">
-    <div className="page-heading"><div><p className="eyebrow">Voxel editor</p>
-      <h1>{existing ? 'Edit furniture' : 'Create furniture'}</h1></div>
-      <span className="status-pill">{history.present.size} / 4096 voxels</span></div>
-    <p>{onSave ? 'Save to your shared furniture library. Unsaved changes are discarded when leaving or reloading.' : 'Local test draft. Leaving or reloading discards this draft.'}</p>
-    {onSave && <div className="editor-toolbar"><button disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : existing ? 'Save changes' : 'Save furniture'}</button><Link to="/furniture">Back to library</Link></div>}
+  return <section className="page immersive-page editor-page">
+    <div className="editor-topbar">
+      <Link className="icon-button" to="/furniture" aria-label="Back to furniture" title="Back"><ArrowLeft aria-hidden="true" /></Link>
+      <label className="editor-name"><span className="sr-only">Furniture name</span><input aria-label="Furniture name" value={name} onChange={event => setName(event.target.value)} placeholder="Name" disabled={saving} /></label>
+      <span className="status-pill" aria-label={`${history.present.size} voxels`}>{history.present.size}</span>
+      <button className="icon-button" aria-label="Undo" title="Undo" disabled={!history.past.length || saving} onClick={() => dispatch({ type: 'undo' })}><Undo2 aria-hidden="true" /></button>
+      <button className="icon-button" aria-label="Redo" title="Redo" disabled={!history.future.length || saving} onClick={() => dispatch({ type: 'redo' })}><Redo2 aria-hidden="true" /></button>
+      {onSave && <button className="icon-button primary-icon" aria-label={saving ? 'Saving furniture' : existing ? 'Save changes' : 'Save furniture'} title="Save" disabled={saving} onClick={() => void save()}><Save aria-hidden="true" /></button>}
+    </div>
     {saveError && <p role="alert" className="auth-error">{saveError}</p>}
-    <fieldset className="editor-fields" disabled={saving}>
-    <label className="editor-name">Furniture name<input value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Cozy chair" /></label>
-    <div className="editor-toolbar" role="group" aria-label="Editing mode">
-      {(['add', 'delete', 'paint'] as const).map(tool => <button key={tool} aria-pressed={!cameraMode && mode === tool}
-        onClick={() => { setMode(tool); setCameraMode(false) }}>{tool[0].toUpperCase() + tool.slice(1)}</button>)}
-      <button aria-pressed={cameraMode} onClick={() => setCameraMode(!cameraMode)}>Camera</button>
+    <fieldset className="editor-fields immersive-workspace" disabled={saving}>
+    <VoxelEditorScene model={history.present} mode={mode}
+      onStrokeStart={() => dispatch({ type: 'stroke-start' })}
+      onStrokeEdit={onStrokeEdit}
+      onStrokeEnd={() => dispatch({ type: 'stroke-end' })}
+      onStrokeCancel={() => dispatch({ type: 'stroke-cancel' })} />
+    <div className="bottom-toolbar" role="group" aria-label="Editing tools">
+      {tools.map(({ mode: tool, label, Icon }) => <button key={tool} aria-label={label} title={label} aria-pressed={mode === tool}
+        onClick={() => setMode(tool)}><Icon aria-hidden="true" /></button>)}
+      <button className="color-button" aria-label="Choose voxel color" title="Color" aria-expanded={colorsOpen} onClick={() => setColorsOpen(value => !value)}>
+        <span className="color-dot" style={{ backgroundColor: color }} />
+      </button>
+      <button className="clear-tool" aria-label="Clear model" title="Clear" disabled={!history.present.size} onClick={() => dispatch({ type: 'clear' })}><Trash2 aria-hidden="true" /></button>
     </div>
-    <div className="editor-toolbar" role="group" aria-label="Voxel color">
-      {palette.map(value => <button key={value} className="color-swatch" aria-label={`Color ${value}`} aria-pressed={color === value}
-        style={{ backgroundColor: value }} onClick={() => setColor(value)} />)}
-      <label className="custom-color">Custom color <input type="color" aria-label="Custom voxel color" value={color} onChange={event => setColor(event.target.value)} /></label>
-    </div>
-    <div className="editor-toolbar" role="group" aria-label="Edit history">
-      <button disabled={!history.past.length} onClick={() => dispatch({ type: 'undo' })}>Undo</button>
-      <button disabled={!history.future.length} onClick={() => dispatch({ type: 'redo' })}>Redo</button>
-      <button disabled={!history.present.size} onClick={() => dispatch({ type: 'clear' })}>Clear</button>
-    </div>
-    <p className="editor-help">{cameraMode ? 'Camera: drag or swipe to orbit; scroll or pinch with two fingers to zoom. Select Add, Delete or Paint to edit.'
-      : `${mode[0].toUpperCase() + mode.slice(1)}: click or tap ${mode === 'add' ? 'the floor to start, or a cube face to add beside it' : 'an existing cube'}. Drags do not edit. Select Camera to orbit or zoom.`} Coordinates: 0–15 on each axis.</p>
-    <VoxelEditorScene model={history.present} mode={mode} cameraMode={cameraMode} onEdit={onEdit} />
+    {colorsOpen && <div className="bottom-sheet color-sheet" role="dialog" aria-label="Choose voxel color">
+      <div className="sheet-heading sheet-heading-end"><button className="icon-button" aria-label="Close color picker" title="Close" onClick={() => setColorsOpen(false)}><X aria-hidden="true" /></button></div>
+      <div className="palette-grid">{palette.map(value => <button key={value} className="color-swatch" aria-label={`Color ${value}`} aria-pressed={color === value}
+        style={{ backgroundColor: value }} onClick={() => { setColor(value); setColorsOpen(false) }} />)}
+        <label className="custom-color"><span className="sr-only">Custom voxel color</span><input type="color" aria-label="Custom voxel color" value={color}
+          onChange={event => setColor(event.target.value)} onBlur={() => setColorsOpen(false)} /></label></div>
+    </div>}
     {import.meta.env.DEV && <EditorDebugPanel name={name} model={history.present} onRestore={(restoredName, model) => {
       dispatch({ type: 'restore', model }); setName(restoredName)
     }} />}
@@ -113,10 +125,9 @@ function EditorDebugPanel({ name, model, onRestore }: {
       setMessage('Snapshot restored. Undo can recover the previous voxel model.')
     } catch { setMessage('Could not restore this snapshot.') }
   }
-  return <details className="editor-debug"><summary>Local/debug serialization</summary>
-    <p>Capture the name and voxel JSON in memory, change or clear the model, then restore it. This is not shared saving or file import/export.</p>
-    <div className="editor-toolbar"><button onClick={capture}>Capture snapshot</button>
-      <button disabled={!snapshot} onClick={restore}>Restore snapshot</button></div>
+  return <details className="editor-debug"><summary aria-label="Local debug serialization"><Database aria-hidden="true" /></summary>
+    <div className="icon-actions"><button className="icon-button" aria-label="Capture local snapshot" title="Capture" onClick={capture}><Database aria-hidden="true" /></button>
+      <button className="icon-button" aria-label="Restore local snapshot" title="Restore" disabled={!snapshot} onClick={restore}><RotateCcw aria-hidden="true" /></button></div>
     {snapshot && <textarea aria-label="Serialized local snapshot" readOnly value={snapshot} rows={5} />}
     <p role="status">{message}</p>
   </details>

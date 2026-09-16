@@ -18,13 +18,12 @@ for (let x = 2; x < 14; x++) for (let y = 0; y < 16; y++) for (let z = 2; z < 14
 function Harness() {
   const [benchmark, setBenchmark] = useState(false)
   const [model, setModel] = useState<VoxelModel>(chair)
-  const [cameraMode, setCameraMode] = useState(true)
   return <MemoryRouter><main className="app-main">
     <button onClick={() => setBenchmark(!benchmark)}>{benchmark ? 'Local editor test' : 'Detailed chair performance test'}</button>
     {benchmark ? <><h1>Detailed chair: {model.size} voxels</h1>
-      <button onClick={() => setCameraMode(!cameraMode)}>{cameraMode ? 'Paint test' : 'Camera test'}</button>
-      <VoxelEditorScene model={model} mode="paint" cameraMode={cameraMode}
-        onEdit={at => setModel(previous => editModel(previous, 'paint', at, '#e781a0'))} /></>
+      <VoxelEditorScene model={model} mode="paint" onStrokeStart={() => {}}
+        onStrokeEdit={at => setModel(previous => editModel(previous, 'paint', at, '#e781a0'))}
+        onStrokeEnd={() => {}} onStrokeCancel={() => {}} /></>
       : <LocalVoxelEditor />}
   </main></MemoryRouter>
 }

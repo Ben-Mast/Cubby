@@ -41,11 +41,11 @@ test('all orthogonal rotations anchor cube bounds at x/z and lowest voxel on flo
   assert.throws(() => reconstructRoomModel({ version: 1, size: [16,16,16], voxels: [] }))
   assert.throws(() => roomTransform({ ...placement(0), rotation: 45 as RoomRotation }, model))
 })
-test('empty room resolves home and skips furniture lookup; anonymous reads fail', async () => {
+test('empty room resolves home and loads the in-room furniture picker; anonymous reads fail', async () => {
   mock.reset(); signIn()
   const data = await fetchSharedRoom()
   assert.equal(data.home.id, 'shared-home'); assert.deepEqual(data.instances, []); assert.deepEqual(data.warnings, [])
-  assert.equal(mock.queryCalls.some(call => call.table === 'furniture'), false)
+  assert.equal(mock.queryCalls.some(call => call.table === 'furniture'), true)
   mock.session = null; await assert.rejects(fetchSharedRoom, /Sign in/)
 })
 test('room reads only referenced same-home definitions and reconstructs once per design', async () => {
@@ -56,7 +56,7 @@ test('room reads only referenced same-home definitions and reconstructs once per
   const data = await fetchSharedRoom()
   assert.equal(data.instances.length, 2)
   assert.equal(data.instances[0].model, data.instances[1].model)
-  const query = mock.queryCalls.find(call => call.table === 'furniture')
+  const query = mock.queryCalls.find(call => call.table === 'furniture' && call.inFilters.length)
   assert.deepEqual(query.inFilters, [['id', ['design']]])
   assert.deepEqual(query.filters, [['home_id', 'shared-home']])
   assert.ok(mock.queryCalls.every(call => call.operation === 'select'))
@@ -68,7 +68,7 @@ test('missing/corrupt designs warn without crashing; network errors do not masqu
   mock.furniture.set('design', { id: 'design', home_id: 'shared-home', name: 'Broken', voxel_data: {} })
   assert.match((await fetchSharedRoom()).warnings.join(' '), /invalid voxel data/)
   mock.roomError = { message: 'Offline' }; await assert.rejects(fetchSharedRoom, /Unable to load your shared room/)
-  mock.roomError = null; mock.furnitureError = { message: 'Offline' }; await assert.rejects(fetchSharedRoom, /Unable to load room furniture designs/)
+  mock.roomError = null; mock.furnitureError = { message: 'Offline' }; await assert.rejects(fetchSharedRoom, /Unable to load (room furniture designs|furniture)/)
 })
 test('room refetch renders updated shared definition rather than an instance copy', async () => {
   mock.reset(); signIn()
@@ -79,15 +79,15 @@ test('room refetch renders updated shared definition rather than an instance cop
   await updateFurniture(row.id, 'Chair', editModel(model, 'paint', { x: 5, y: 4, z: 5 }, '#ffffff'))
   assert.equal((await fetchSharedRoom()).instances[0].model.voxels[0].color, '#ffffff')
 })
-test('room route shows home/empty state, refreshes seeded records, and reports load failures', async () => {
+test('room route omits the redundant home name, shows empty state, refreshes seeded records, and reports load failures', async () => {
   mock.reset(); signIn()
   let renderer: any
   await act(async () => { renderer = create(<MemoryRouter initialEntries={['/room']}><AuthProvider><App /></AuthProvider></MemoryRouter>) })
-  assert.match(JSON.stringify(renderer.toJSON()), /Our Cubby/)
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Our Cubby/)
   assert.match(JSON.stringify(renderer.toJSON()), /The room is empty/)
   mock.furniture.set('design', { id: 'design', home_id: 'shared-home', name: 'Chair', voxel_data: voxelData })
   mock.placements = [placement(270)]
-  const refresh = () => renderer.root.findAllByType('button').find((node: any) => node.children.includes('Refresh room'))
+  const refresh = () => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === 'Refresh room')
   await act(async () => refresh().props.onClick())
   assert.match(JSON.stringify(renderer.toJSON()), /1.*instances/)
   mock.roomError = { message: 'Offline' }

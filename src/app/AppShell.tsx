@@ -1,35 +1,57 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { Armchair, House, LogOut } from 'lucide-react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { useAuth } from '../features/auth/AuthProvider'
 
-const navigation = [
-  { to: '/room', label: 'Room' },
-  { to: '/furniture', label: 'Furniture' },
-  { to: '/settings', label: 'Settings' },
-]
+interface HeaderAction {
+  content: ReactNode
+}
+
+const HeaderActionContext = createContext<(action: HeaderAction | null) => void>(() => {})
+
+export function useHeaderAction() {
+  return useContext(HeaderActionContext)
+}
 
 export function AppShell() {
+  const { pathname } = useLocation()
+  const { signOut } = useAuth()
+  const [loggingOut, setLoggingOut] = useState(false)
+  const [logoutError, setLogoutError] = useState('')
+  const [headerAction, setHeaderAction] = useState<HeaderAction | null>(null)
+  const registerHeaderAction = useMemo(() => setHeaderAction, [])
+  const immersive = pathname === '/room' || pathname === '/furniture/new' || /^\/furniture\/[^/]+\/edit$/.test(pathname)
+  async function logout() {
+    if (loggingOut) return
+    setLoggingOut(true); setLogoutError('')
+    try { await signOut() }
+    catch (reason) {
+      setLogoutError(reason instanceof Error ? reason.message : 'Unable to log out.')
+      setLoggingOut(false)
+    }
+  }
   return (
-    <div className="app-shell">
+    <div className={`app-shell${immersive ? ' immersive-shell' : ''}`}>
       <header className="app-header">
-        <NavLink className="brand" to="/room" aria-label="Cubby room">
-          <span className="brand-mark" aria-hidden="true">C</span>
-          <span>Cubby</span>
-        </NavLink>
         <nav className="primary-nav" aria-label="Primary navigation">
-          {navigation.map((item) => (
-            <NavLink
-              className={({ isActive }) => isActive ? 'nav-link nav-link-active' : 'nav-link'}
-              key={item.to}
-              to={item.to}
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          <NavLink aria-label="Room" title="Room" className={({ isActive }) => isActive ? 'nav-link nav-link-active' : 'nav-link'} to="/room">
+            <House aria-hidden="true" />
+          </NavLink>
+          <NavLink aria-label="Furniture" title="Furniture" className={({ isActive }) => isActive ? 'nav-link nav-link-active' : 'nav-link'} to="/furniture">
+            <Armchair aria-hidden="true" />
+          </NavLink>
+          {headerAction?.content}
+          <button className="nav-link nav-button" aria-label="Log out" title="Log out" disabled={loggingOut} onClick={() => void logout()}>
+            <LogOut aria-hidden="true" />
+          </button>
         </nav>
       </header>
+      {logoutError && <p className="chrome-error" role="alert">{logoutError}</p>}
       <main className="app-main">
-        <Outlet />
+        <HeaderActionContext.Provider value={registerHeaderAction}>
+          <Outlet />
+        </HeaderActionContext.Provider>
       </main>
     </div>
   )
 }
-

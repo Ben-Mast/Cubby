@@ -99,7 +99,7 @@ test('writes revalidate latest room/geometry, reject invalid or unavailable data
 
 test('workspace placement, invalid feedback, cancellation, camera isolation, move, rotation and removal', async () => {
   let renderer: any
-  let room = { home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [] as RoomInstance[],warnings: [] }
+  let room = { home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [] as RoomInstance[],furniture: [],warnings: [] }
   let picked: typeof design | null = design
   let calls: any[] = []
   const row = { ...instance.placement }
@@ -108,43 +108,32 @@ test('workspace placement, invalid feedback, cancellation, camera isolation, mov
     update: async (...args: any[]) => { calls.push(['update',...args]); return row },
     remove: async (...args: any[]) => { calls.push(['remove',...args]) },
   }
-  const element = () => <MemoryRouter><RoomWorkspace room={room} design={picked} refresh={() => {}} clearDesign={() => { picked = null }} actions={actions} /></MemoryRouter>
+  const element = () => <MemoryRouter><RoomWorkspace room={room} design={picked} refresh={() => {}} clearDesign={() => { picked = null }} chooseFurniture={() => {}} actions={actions} /></MemoryRouter>
   const render = async () => act(async () => { if (renderer) renderer.update(element()); else renderer = create(element()) })
-  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.children.includes(name))
+  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
   const scene = () => renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
   await render()
-  assert.equal(scene().cameraEnabled, false)
-  await act(async () => scene().onPosition({ x: 15,z: 15 }))
+  await act(async () => { scene().onDragStart(null, { x: 15,z: 15 }); scene().onDragEnd({ x: 15,z: 15 }) })
   assert.equal(button('Confirm placement').props.disabled, true)
   assert.match(JSON.stringify(renderer.toJSON()), /inside the room/)
-  await act(async () => scene().onPosition({ x: 5,z: 7 }))
-  await act(async () => button('Rotate preview 90°').props.onClick())
+  await act(async () => { scene().onDragStart(null, { x: 5,z: 7 }); scene().onDragEnd({ x: 5,z: 7 }) })
+  await act(async () => button('Rotate preview 90 degrees').props.onClick())
   assert.equal(scene().preview.placement.rotation, 90)
-  await act(async () => button('Camera').props.onClick())
-  assert.equal(scene().onPosition, undefined)
-  await act(async () => button('Position furniture').props.onClick())
   await act(async () => button('Confirm placement').props.onClick())
   assert.deepEqual(calls[0], ['create','design',{ x: 5,z: 7,rotation: 90 }])
   room = { ...room,instances: [instance] }; await render()
-  await act(async () => button('Select furniture').props.onClick())
   await act(async () => scene().onSelect('placed'))
   assert.equal(scene().selectedId, 'placed')
-  await act(async () => button('Move').props.onClick())
-  await act(async () => scene().onPosition({ x: 8,z: 8 }))
-  await act(async () => button('Cancel placement').props.onClick())
-  assert.equal(calls.length, 1)
-  await act(async () => button('Move').props.onClick())
-  await act(async () => scene().onPosition({ x: 8,z: 8 }))
-  await act(async () => button('Confirm move').props.onClick())
+  await act(async () => { scene().onDragStart('placed', { x: 2,z: 4 }); scene().onDrag({ x: 8,z: 8 }); scene().onDragEnd({ x: 8,z: 8 }) })
   assert.deepEqual(calls[1], ['update','placed','design',{ x: 8,z: 8,rotation: 0 }])
-  await act(async () => button('Rotate 90°').props.onClick())
+  await act(async () => button('Rotate selected furniture 90 degrees').props.onClick())
   assert.equal(calls[2][3].rotation, 90)
-  await act(async () => button('Remove').props.onClick())
-  assert.match(JSON.stringify(renderer.toJSON()), /saved furniture design stays/)
-  await act(async () => button('Cancel remove').props.onClick())
+  await act(async () => button('Remove selected furniture').props.onClick())
+  assert.match(JSON.stringify(renderer.toJSON()), /saved design stays/)
+  await act(async () => button('Cancel removal').props.onClick())
   assert.equal(calls.length, 3)
-  await act(async () => button('Remove').props.onClick())
-  await act(async () => button('Confirm remove').props.onClick())
+  await act(async () => button('Remove selected furniture').props.onClick())
+  await act(async () => button('Confirm removal').props.onClick())
   assert.deepEqual(calls[3], ['remove','placed'])
   await act(async () => renderer.unmount())
 })
@@ -152,13 +141,13 @@ test('library Place in Room links to protected room placement mode and saves thr
   setup(); mock.session.user.email = identities[0].email
   let renderer: any
   await act(async () => { renderer = create(<MemoryRouter initialEntries={['/furniture']}><AuthProvider><App /></AuthProvider></MemoryRouter>) })
-  const link = renderer.root.findAllByType('a').find((node: any) => node.children.includes('Place in Room'))
+  const link = renderer.root.findAllByType('a').find((node: any) => node.props['aria-label'] === 'Place Bench in room')
   assert.equal(link.props.href, '/room?place=design')
   await act(async () => renderer.unmount())
   await act(async () => { renderer = create(<MemoryRouter initialEntries={['/room?place=design']}><AuthProvider><App /></AuthProvider></MemoryRouter>) })
   const scene = () => renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
-  await act(async () => scene().onPosition({ x: 4,z: 6 }))
-  await act(async () => renderer.root.findAllByType('button').find((node: any) => node.children.includes('Confirm placement'))!.props.onClick())
+  await act(async () => { scene().onDragStart(null, { x: 4,z: 6 }); scene().onDragEnd({ x: 4,z: 6 }) })
+  await act(async () => renderer.root.findByProps({ 'aria-label': 'Confirm placement' }).props.onClick())
   assert.equal(mock.placements.length,1)
   assert.equal(mock.placements[0].x,4)
   assert.match(JSON.stringify(renderer.toJSON()), /1.*instances/)
@@ -173,9 +162,9 @@ test('placement failures retain the draft, refetch authoritative state, and bloc
     update: updatePlacement,remove: removePlacement,
   }
   await act(async () => { renderer = create(<MemoryRouter><RoomWorkspace
-    room={{ home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [],warnings: [] }}
-    design={design} refresh={() => { refreshes++ }} clearDesign={() => {}} actions={actions} /></MemoryRouter>) })
-  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.children.includes(name))
+    room={{ home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [],furniture: [],warnings: [] }}
+    design={design} refresh={() => { refreshes++ }} clearDesign={() => {}} chooseFurniture={() => {}} actions={actions} /></MemoryRouter>) })
+  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
   await act(async () => { button('Confirm placement').props.onClick(); button('Confirm placement').props.onClick() })
   assert.equal(submissions,1)
   await act(async () => rejectSave(new Error('Offline; refresh before retrying.')))

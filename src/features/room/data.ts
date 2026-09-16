@@ -1,17 +1,19 @@
 import { supabase } from '../../lib/supabase/client'
 import { fetchCurrentHome, type SharedHome } from '../home/currentHome'
-import { getFurnitureDefinitions } from '../furniture/data'
+import { getFurnitureDefinitions, listFurnitureForHome, type FurnitureSummary } from '../furniture/data'
 import { reconstructRoomModel, roomTransform, type PlacedFurniture, type RoomInstance, type RoomModel } from './model'
 import { validatePlacement, type FloorPosition } from './placement'
 
-export interface SharedRoomData { home: SharedHome; instances: RoomInstance[]; warnings: string[] }
+export interface SharedRoomData { home: SharedHome; instances: RoomInstance[]; furniture: FurnitureSummary[]; warnings: string[] }
 export async function fetchSharedRoom(): Promise<SharedRoomData> {
   const home = await fetchCurrentHome()
   return fetchSharedRoomForHome(home)
 }
 export async function fetchSharedRoomForHome(home: SharedHome): Promise<SharedRoomData> {
-  const { data, error } = await supabase.from('placed_furniture')
-    .select('id, home_id, furniture_id, x, z, rotation').eq('home_id', home.id).order('id')
+  const [{ data, error }, furniture] = await Promise.all([
+    supabase.from('placed_furniture').select('id, home_id, furniture_id, x, z, rotation').eq('home_id', home.id).order('id'),
+    listFurnitureForHome(home.id),
+  ])
   if (error) throw new Error('Unable to load your shared room. Check your connection and retry.')
   const placements = (data ?? []) as PlacedFurniture[]
   const definitions = await getFurnitureDefinitions(home.id, placements.map(item => item.furniture_id))
@@ -30,7 +32,7 @@ export async function fetchSharedRoomForHome(home: SharedHome): Promise<SharedRo
     catch { warnings.push('A placed item has invalid position/rotation data and could not be rendered.') }
   }
   if (missing) warnings.push('Some placed designs are unavailable. Refresh the room to load the latest data.')
-  return { home, instances, warnings }
+  return { home, instances, furniture, warnings }
 }
 
 async function checkedPlacement(furnitureId: string, position: FloorPosition, placementId?: string) {
