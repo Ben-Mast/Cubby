@@ -6,7 +6,7 @@ import { getFurniture, type FurnitureRecord } from '../features/furniture/data'
 import { SharedRoomScene } from '../features/room/SharedRoomScene'
 import { useSharedRoom } from '../features/room/useSharedRoom'
 import { createPlacement, updatePlacement, removePlacement, type SharedRoomData } from '../features/room/data'
-import { reconstructRoomModel, type RoomModel } from '../features/room/model'
+import { reconstructRoomModel, type PlacedFurniture, type RoomInstance, type RoomModel } from '../features/room/model'
 import { rotate90, validatePlacement, type FloorPosition } from '../features/room/placement'
 import { useHeaderAction } from '../app/AppShell'
 
@@ -18,7 +18,7 @@ export function RoomPage() {
   return <RoomLoader key={identity?.id} />
 }
 function RoomLoader() {
-  const { data, loading, error, syncError, refresh } = useSharedRoom()
+  const { data, loading, error, syncError, refresh, upsertPlacement, removePlacement } = useSharedRoom()
   const setHeaderAction = useHeaderAction()
   const [params, setParams] = useSearchParams()
   const furnitureId = params.get('place')
@@ -48,13 +48,16 @@ function RoomLoader() {
       {furnitureId && <button className="icon-button" aria-label="Cancel placement" title="Cancel" onClick={clearDesign}><X aria-hidden="true" /></button>}</div></div>}
     {syncError && <p role="status" className="auth-error floating-status">{syncError}</p>}
     <RoomWorkspace room={data} design={design} disabled={loading || designLoading || Boolean(error || designError)}
-      refresh={refresh} clearDesign={clearDesign} chooseFurniture={id => setParams({ place: id })} />
+      refresh={refresh} upsertPlacement={upsertPlacement} removePlacement={removePlacement}
+      clearDesign={clearDesign} chooseFurniture={id => setParams({ place: id })} />
   </section>
 }
 
-export function RoomWorkspace({ room, design, disabled = false, refresh, clearDesign, chooseFurniture, actions = placementActions }: {
+export function RoomWorkspace({ room, design, disabled = false, refresh, upsertPlacement, removePlacement: removeLocalPlacement,
+  clearDesign, chooseFurniture, actions = placementActions }: {
   room: SharedRoomData | null; design: FurnitureRecord | null; disabled?: boolean
-  refresh: () => void; clearDesign: () => void; chooseFurniture: (id: string) => void; actions?: typeof placementActions
+  refresh: () => void; upsertPlacement?: (instance: RoomInstance) => void; removePlacement?: (id: string) => void
+  clearDesign: () => void; chooseFurniture: (id: string) => void; actions?: typeof placementActions
 }) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const draftRef = useRef<Draft | null>(null)
@@ -63,6 +66,7 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
   const [selectedId, setSelectedId] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [hiddenId, setHiddenId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const lock = useRef(false)
@@ -82,19 +86,22 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
   function updateDraft(next: Draft | null) { draftRef.current = next; setDraft(next) }
   function cancelPlacement() { updateDraft(null); setError(''); clearDesign() }
   function select(id: string) { if (blocked || draft) return; setSelectedId(id); setRemoving(false); setError('') }
-  async function mutate(operation: () => Promise<unknown>, finish: () => void) {
+  async function mutate<T>(operation: () => Promise<T>, finish: (result: T) => void, fail?: () => void) {
     if (lock.current || blocked) return
     lock.current = true; setBusy(true); setError('')
-    try { await operation(); if (active.current) { finish(); refresh() } }
+    try { const result = await operation(); if (active.current) finish(result) }
     catch (reason) { if (active.current) {
-      if (draftRef.current?.movingId) updateDraft(null)
+      fail?.()
       setError(reason instanceof Error ? reason.message : 'Unable to save room changes.'); refresh()
     } }
     finally { lock.current = false; if (active.current) setBusy(false) }
   }
   function confirmPlacement() {
     if (!draft || invalid || unavailable) return
-    void mutate(() => actions.create(draft.furnitureId, draft.position), cancelPlacement)
+    void mutate(() => actions.create(draft.furnitureId, draft.position), row => {
+      upsertPlacement?.({ placement: row, model: draft.model, name: draft.name })
+      cancelPlacement()
+    })
   }
   function rotateDraft() {
     if (!draft) return
@@ -107,7 +114,9 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
     if (invalidRotation) { setError(invalidRotation); return }
     updateDraft({ furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture', model: selected.model,
       position, movingId: selected.placement.id })
-    void mutate(() => actions.update(selected.placement.id, selected.placement.furniture_id, position), () => updateDraft(null))
+    void mutate(() => actions.update(selected.placement.id, selected.placement.furniture_id, position), row => {
+      upsertPlacement?.({ ...selected, placement: row }); updateDraft(null)
+    }, () => updateDraft(null))
   }
   function startDrag(id: string | null, position: { x: number; z: number } | null) {
     if (blocked || removing) return false
@@ -143,9 +152,14 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
     dragOrigin.current = null
     if (!current.movingId) { updateDraft(current); return }
     const issue = validatePlacement(current.model, current.position, instances, current.movingId)
-    updateDraft(null)
-    if (issue || unavailable) { setError(issue || 'Room data is unavailable. Refresh and try again.'); return }
-    void mutate(() => actions.update(current.movingId!, current.furnitureId, current.position), () => {})
+    if (issue || unavailable) { updateDraft(null); setError(issue || 'Room data is unavailable. Refresh and try again.'); return }
+    updateDraft(current)
+    const movingId = current.movingId
+    const moving = selected
+    void mutate(() => actions.update(movingId, current.furnitureId, current.position), row => {
+      if (moving) upsertPlacement?.({ ...moving, placement: row })
+      updateDraft(null)
+    }, () => updateDraft(null))
   }
   function cancelDrag() {
     const origin = dragOrigin.current
@@ -153,15 +167,21 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
     if (!origin) return
     updateDraft(origin.movingId ? null : origin)
   }
-  const preview = draft && room ? { name: draft.name, model: draft.model, placement: {
+  const preview = draft && !draft.movingId && room ? { name: draft.name, model: draft.model, placement: {
     id: 'preview', home_id: room.home.id, furniture_id: draft.furnitureId, ...draft.position,
   } } : null
+  const visibleInstances = instances.filter(item => item.placement.id !== hiddenId)
+    .filter(item => !(busy && draft && !draft.movingId && item.placement.furniture_id === draft.furnitureId
+      && item.placement.x === draft.position.x && item.placement.z === draft.position.z
+      && item.placement.rotation === draft.position.rotation))
+    .map(item => item.placement.id === draft?.movingId
+      ? { ...item, placement: { ...item.placement, ...draft.position } as PlacedFurniture } : item)
   return <div className="room-workspace">
     {room && !instances.length && <span className="sr-only">The room is empty.</span>}
     {room?.warnings.map((warning, index) => <p role="status" className="floating-status" key={index}>{warning}</p>)}
-    {busy && <p role="status" className="floating-status">Saving room changes…</p>}
+    {busy && <p role="status" className="sr-only">Saving room changes…</p>}
     {error && <p role="alert" className="auth-error floating-status">{error}</p>}
-    <SharedRoomScene instances={instances.filter(item => item.placement.id !== draft?.movingId)} selectedId={selectedId}
+    <SharedRoomScene instances={visibleInstances} selectedId={selectedId}
       preview={preview} previewInvalid={Boolean(invalid) || unavailable} disabled={blocked}
       onSelect={select} onDragStart={startDrag} onDrag={dragTo} onDragEnd={endDrag} onDragCancel={cancelDrag} />
     <div className="bottom-toolbar room-bottom-toolbar">
@@ -170,8 +190,8 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
         <button aria-label="Rotate preview 90 degrees" title="Rotate" onClick={rotateDraft}><RotateCw aria-hidden="true" /></button>
         <button aria-label="Confirm placement" title="Confirm" disabled={Boolean(invalid) || unavailable} onClick={confirmPlacement}><Check aria-hidden="true" /></button>
       </> : selected ? <>
-        <button aria-label="Rotate selected furniture 90 degrees" title="Rotate" disabled={unavailable || removing} onClick={rotateSelected}><RotateCw aria-hidden="true" /></button>
-        <button className="danger-button" aria-label="Remove selected furniture" title="Remove" onClick={() => setRemoving(true)}><Trash2 aria-hidden="true" /></button>
+        <button aria-label="Rotate selected furniture 90 degrees" title="Rotate" disabled={busy || unavailable || removing} onClick={rotateSelected}><RotateCw aria-hidden="true" /></button>
+        <button className="danger-button" aria-label="Remove selected furniture" title="Remove" disabled={busy} onClick={() => setRemoving(true)}><Trash2 aria-hidden="true" /></button>
       </> : <button className="primary-wide" aria-label="Open furniture picker" title="Furniture" disabled={blocked} onClick={() => setPickerOpen(true)}><Armchair aria-hidden="true" /></button>}
     </div>
     {invalid && <p role="status" className="placement-feedback">{invalid}</p>}
@@ -184,7 +204,13 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, clearDe
     {removing && selected && <div className="bottom-sheet confirmation-sheet" role="dialog" aria-label="Remove placed furniture">
       <strong>Remove {selected.name ?? 'this furniture'}?</strong><p>The saved design stays in your library.</p>
       <div className="sheet-actions"><button className="icon-button" aria-label="Cancel removal" title="Cancel" onClick={() => setRemoving(false)}><X aria-hidden="true" /></button>
-        <button className="icon-button danger-icon" aria-label="Confirm removal" title="Remove" onClick={() => void mutate(() => actions.remove(selected.placement.id), () => { setSelectedId(''); setRemoving(false) })}><Trash2 aria-hidden="true" /></button></div>
+        <button className="icon-button danger-icon" aria-label="Confirm removal" title="Remove" disabled={busy} onClick={() => {
+          setHiddenId(selected.placement.id)
+          void mutate(() => actions.remove(selected.placement.id), () => {
+            removeLocalPlacement?.(selected.placement.id)
+            setHiddenId(''); setSelectedId(''); setRemoving(false)
+          }, () => setHiddenId(''))
+        }}><Trash2 aria-hidden="true" /></button></div>
     </div>}
   </div>
 }

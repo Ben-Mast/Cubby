@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { useState } from 'react'
 import { act, create } from 'react-test-renderer'
 import { MemoryRouter } from 'react-router-dom'
 import { placementBounds, rotate90, snapFloorPoint, validatePlacement } from '../src/features/room/placement'
@@ -12,6 +13,7 @@ import { pickRoomItem, pickRoomPosition } from '../src/features/room/input'
 import { AuthProvider } from '../src/features/auth/AuthProvider'
 import { App } from '../src/app/App'
 import { identities } from '../src/features/auth/identities'
+import { sceneLifecycle } from './mockScene'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const design = { id: 'design', home_id: 'shared-home', creator_id: 'user-one', name: 'Bench', created_at: '', updated_at: '',
@@ -135,6 +137,73 @@ test('workspace placement, invalid feedback, cancellation, camera isolation, mov
   await act(async () => button('Remove selected furniture').props.onClick())
   await act(async () => button('Confirm removal').props.onClick())
   assert.deepEqual(calls[3], ['remove','placed'])
+  await act(async () => renderer.unmount())
+})
+test('slow placement saves keep preview or same-ID furniture visible without a scene remount or refetch', async () => {
+  let renderer: any, refreshes = 0, writes = 0
+  let remoteUpsert: (item: RoomInstance) => void = () => {}
+  let finishCreate: (row: typeof instance.placement) => void = () => {}
+  let finishUpdate: (row: typeof instance.placement) => void = () => {}
+  let finishRemove: () => void = () => {}
+  const actions = {
+    create: () => { writes++; return new Promise<typeof instance.placement>(resolve => { finishCreate = resolve }) },
+    update: () => { writes++; return new Promise<typeof instance.placement>(resolve => { finishUpdate = resolve }) },
+    remove: () => { writes++; return new Promise<void>(resolve => { finishRemove = resolve }) },
+  }
+  function Harness() {
+    const [room, setRoom] = useState({ home: { id: 'shared-home', name: 'Home', created_at: '' },
+      instances: [] as RoomInstance[], furniture: [], warnings: [] })
+    const [picked, setPicked] = useState<typeof design | null>(design)
+    remoteUpsert = item => setRoom(current => ({ ...current, instances: [...current.instances.filter(existing =>
+      existing.placement.id !== item.placement.id), item] }))
+    return <MemoryRouter><RoomWorkspace room={room} design={picked} refresh={() => { refreshes++ }}
+      upsertPlacement={remoteUpsert}
+      removePlacement={id => setRoom(current => ({ ...current, instances: current.instances.filter(item => item.placement.id !== id) }))}
+      clearDesign={() => setPicked(null)} chooseFurniture={() => {}} actions={actions} /></MemoryRouter>
+  }
+  const mounts = sceneLifecycle.mounts, unmounts = sceneLifecycle.unmounts
+  await act(async () => { renderer = create(<Harness />) })
+  const scene = () => renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
+  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
+  await act(async () => { scene().onDragStart(null, { x: 5, z: 5 }); scene().onDragEnd({ x: 5, z: 5 }) })
+  await act(async () => button('Confirm placement').props.onClick())
+  assert.equal(writes, 1)
+  assert.equal(scene().instances.length, 0)
+  assert.ok(scene().preview, 'preview remains while create is pending')
+  assert.equal(refreshes, 0)
+  await act(async () => remoteUpsert({ ...instance, placement: { ...instance.placement, x: 5, z: 5 } }))
+  assert.equal(scene().instances.length, 0, 'early realtime echo stays under the preview')
+  await act(async () => finishCreate({ ...instance.placement, x: 5, z: 5 }))
+  assert.equal(scene().instances.length, 1)
+  assert.equal(scene().instances[0].placement.id, 'placed')
+  assert.equal(scene().preview, null)
+  await act(async () => scene().onSelect('placed'))
+  await act(async () => { scene().onDragStart('placed', { x: 5, z: 5 }); scene().onDrag({ x: 8, z: 8 }) })
+  assert.equal(writes, 1, 'pointer movement does not write to the database')
+  assert.equal(scene().instances[0].placement.x, 8)
+  await act(async () => scene().onDragEnd({ x: 8, z: 8 }))
+  assert.equal(writes, 2)
+  assert.equal(scene().instances[0].placement.id, 'placed')
+  assert.equal(scene().instances[0].placement.x, 8, 'new position stays visible during save')
+  assert.equal(scene().preview, null)
+  await act(async () => finishUpdate({ ...instance.placement, x: 8, z: 8 }))
+  assert.equal(scene().instances[0].placement.x, 8)
+  await act(async () => button('Rotate selected furniture 90 degrees').props.onClick())
+  assert.equal(scene().instances[0].placement.rotation, 90)
+  await act(async () => finishUpdate({ ...instance.placement, x: 8, z: 8, rotation: 90 }))
+  assert.equal(scene().instances[0].placement.rotation, 90)
+  await act(async () => remoteUpsert({ ...instance, placement: { ...instance.placement, id: 'other', x: 12, z: 12 } }))
+  assert.equal(scene().instances.length, 2)
+  await act(async () => button('Remove selected furniture').props.onClick())
+  await act(async () => button('Confirm removal').props.onClick())
+  assert.equal(scene().instances.length, 1)
+  assert.equal(scene().instances[0].placement.id, 'other')
+  await act(async () => finishRemove())
+  assert.equal(scene().instances.length, 1)
+  assert.equal(scene().instances[0].placement.id, 'other')
+  assert.equal(refreshes, 0)
+  assert.equal(sceneLifecycle.mounts, mounts + 1)
+  assert.equal(sceneLifecycle.unmounts, unmounts)
   await act(async () => renderer.unmount())
 })
 test('library Place in Room links to protected room placement mode and saves through the real loader', async () => {

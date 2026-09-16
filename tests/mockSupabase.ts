@@ -19,8 +19,9 @@ export const mock = {
   countError: null as any,
   placements: [] as any[],
   roomError: null as any,
+  roomReadGate: null as Promise<void> | null,
   channels: new Set<any>(),
-  creatorNames: { 'test-user': 'Ben', 'user-one': 'Ben', 'user-two': 'Girlfriend' } as Record<string, string>,
+  creatorNames: { 'test-user': 'Ben', 'user-one': 'Ben', 'user-two': 'Gabby' } as Record<string, string>,
   nextId: 1,
   reset() {
     this.session = null
@@ -36,7 +37,7 @@ export const mock = {
     this.membershipError = this.homeError = null
     this.furniture.clear(); this.placedCounts.clear()
     this.furnitureError = this.countError = null
-    this.placements = []; this.roomError = null
+    this.placements = []; this.roomError = null; this.roomReadGate = null
     this.channels.clear()
     this.nextId = 1
   },
@@ -104,7 +105,12 @@ export const supabase = {
       insert(values: any) { call.operation = 'insert'; call.values = values; return query },
       update(values: any) { call.operation = 'update'; call.values = values; return query },
       delete() { call.operation = 'delete'; return query },
-      then(resolve: any, reject: any) { return Promise.resolve(execute()).then(resolve, reject) },
+      then(resolve: any, reject: any) {
+        const result = execute()
+        const delayed = table === 'placed_furniture' && call.operation === 'select' && mock.roomReadGate
+          ? mock.roomReadGate.then(() => result) : Promise.resolve(result)
+        return delayed.then(resolve, reject)
+      },
       async maybeSingle() {
         if (table === 'home_members') return { data: mock.membership, error: mock.membershipError }
         const result = execute(); return { data: result.data?.[0] ?? null, error: result.error }

@@ -40,6 +40,12 @@ test('migration/setup execute and enforce API grants, RLS, constraints, and casc
     await db.query('update auth.users set email=$1 where id=$2', ['outsider@cubby.example', outsider])
     await db.exec(setup)
     await db.exec(setup)
+    await db.query('update public.profiles set display_name=$1 where id=$2', ['Girlfriend', userTwo])
+    const gabbyMigration = readFileSync('supabase/migrations/202609160001_gabby_display_name.sql', 'utf8')
+    await db.exec(gabbyMigration)
+    await db.exec(gabbyMigration)
+    assert.equal((await db.query('select display_name from public.profiles where id=$1', [userTwo])).rows[0].display_name, 'Gabby')
+    assert.equal((await db.query('select display_name from public.profiles where id=$1', [userOne])).rows[0].display_name, 'Ben')
     const homeId = (await db.query('select id from public.homes')).rows[0].id
     assert.equal((await db.query('select * from public.home_members')).rows.length, 2)
     assert.equal((await db.query('select * from public.homes')).rows.length, 1)

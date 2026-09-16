@@ -11,7 +11,7 @@ export async function fetchSharedRoom(): Promise<SharedRoomData> {
 }
 export async function fetchSharedRoomForHome(home: SharedHome): Promise<SharedRoomData> {
   const [{ data, error }, furniture] = await Promise.all([
-    supabase.from('placed_furniture').select('id, home_id, furniture_id, x, z, rotation').eq('home_id', home.id).order('id'),
+    supabase.from('placed_furniture').select('id, home_id, furniture_id, x, z, rotation, updated_at').eq('home_id', home.id).order('id'),
     listFurnitureForHome(home.id),
   ])
   if (error) throw new Error('Unable to load your shared room. Check your connection and retry.')
@@ -46,7 +46,7 @@ async function checkedPlacement(furnitureId: string, position: FloorPosition, pl
   if (invalid) throw new Error(invalid)
   return room.home.id
 }
-const placementColumns = 'id, home_id, furniture_id, x, z, rotation'
+const placementColumns = 'id, home_id, furniture_id, x, z, rotation, updated_at'
 function placementWriteError(error: { code?: string; message?: string } | null, fallback: string): Error {
   if (error?.code === '23514' && (error.message === 'Furniture must fit inside the room.' || error.message === 'Furniture overlaps another placed item.'))
     return new Error(error.message)

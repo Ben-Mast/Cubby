@@ -3,7 +3,7 @@ import { ROOM_DEPTH, ROOM_WIDTH, VOXEL_UNIT } from './config'
 
 export type RoomRotation = 0 | 90 | 180 | 270
 export interface PlacedFurniture {
-  id: string; home_id: string; furniture_id: string; x: number; z: number; rotation: RoomRotation
+  id: string; home_id: string; furniture_id: string; x: number; z: number; rotation: RoomRotation; updated_at?: string
 }
 export interface RoomModel {
   voxels: readonly Voxel[]

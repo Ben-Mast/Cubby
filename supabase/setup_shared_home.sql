@@ -9,7 +9,7 @@ declare
   user_one uuid;
   user_two uuid;
   name_one text := 'Ben';
-  name_two text := 'Girlfriend';
+  name_two text := 'Gabby';
   shared_home uuid;
 begin
   if lower(email_one) = lower(email_two) then

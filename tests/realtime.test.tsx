@@ -25,6 +25,12 @@ function RoomProbe() {
   return <div data-sync={state.syncError}>{state.loading ? 'loading' : state.data?.instances.map(item =>
     `${item.placement.id}:${item.placement.x}:${item.placement.rotation}:${item.model.voxels[0].color}`).join('|')}</div>
 }
+function RoomControlProbe({ observe }: { observe: (state: ReturnType<typeof useSharedRoom>) => void }) {
+  const state = useSharedRoom()
+  observe(state)
+  return <div>{state.loading ? 'loading' : state.data?.instances.map(item =>
+    `${item.placement.id}:${item.placement.x}`).join('|')}</div>
+}
 
 test('home subscription scopes inserts/updates, handles deletes, reconnects, and removes exactly once', async () => {
   mock.reset()
@@ -118,6 +124,94 @@ test('room reacts to placement CRUD and furniture definition edits without dupli
   assert.doesNotMatch(JSON.stringify(renderer.toJSON()),/second:/)
   await act(async () => renderer.unmount())
   assert.equal(mock.channels.size,0)
+})
+
+test('room placement realtime events reconcile by ID without reloading the room snapshot', async () => {
+  mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
+  mock.placements = [{ id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+    rotation: 0, updated_at: '2026-01-01T00:00:00Z' }]
+  let renderer: any
+  await act(async () => { renderer = create(<AuthProvider><RoomProbe /></AuthProvider>); await settle() })
+  const reads = () => mock.queryCalls.filter(call => call.table === 'placed_furniture' && call.operation === 'select').length
+  const initialReads = reads()
+  mock.placements[0] = { ...mock.placements[0], x: 5, updated_at: '2026-01-02T00:00:00Z' }
+  await act(async () => { mock.emitRealtime('placed_furniture', 'UPDATE', mock.placements[0]); await settle() })
+  assert.match(JSON.stringify(renderer.toJSON()), /placed:5/)
+  assert.equal(reads(), initialReads)
+  await act(async () => { mock.emitRealtime('placed_furniture', 'UPDATE', {
+    ...mock.placements[0], x: 2, updated_at: '2026-01-01T00:00:00Z',
+  }); await settle() })
+  assert.match(JSON.stringify(renderer.toJSON()), /placed:5/, 'late older echo cannot reverse a newer position')
+  mock.placements.push({ ...mock.placements[0], id: 'second', x: 9 })
+  await act(async () => { mock.emitRealtime('placed_furniture', 'INSERT', mock.placements[1]); await settle() })
+  await act(async () => { mock.emitRealtime('placed_furniture', 'INSERT', mock.placements[1]); await settle() })
+  assert.match(JSON.stringify(renderer.toJSON()), /second:9/)
+  assert.equal((JSON.stringify(renderer.toJSON()).match(/second:9/g) ?? []).length, 1)
+  assert.equal(reads(), initialReads)
+  mock.placements = mock.placements.filter(item => item.id !== 'placed')
+  await act(async () => { mock.emitRealtime('placed_furniture', 'DELETE', { id: 'placed' }); await settle() })
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /placed:/)
+  assert.equal(reads(), initialReads)
+  await act(async () => renderer.unmount())
+})
+
+test('manual background refresh retains room state and ignores a snapshot made stale by a local save', async () => {
+  mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
+  const old = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+    rotation: 0 as const, updated_at: '2026-01-01T00:00:00Z' }
+  mock.placements = [old]
+  let latest: ReturnType<typeof useSharedRoom> | null = null
+  const history: string[] = []
+  let renderer: any
+  await act(async () => { renderer = create(<AuthProvider><RoomControlProbe observe={state => {
+    latest = state; history.push(state.data?.instances.map(item => `${item.placement.id}:${item.placement.x}`).join('|') ?? 'empty')
+  }} /></AuthProvider>); await settle() })
+  assert.match(JSON.stringify(renderer.toJSON()), /placed:2/)
+  let release: () => void = () => {}
+  mock.roomReadGate = new Promise<void>(resolve => { release = resolve })
+  await act(async () => latest!.refresh())
+  assert.equal(latest!.loading, false)
+  assert.match(JSON.stringify(renderer.toJSON()), /placed:2/)
+  const model = latest!.data!.instances[0].model
+  const saved = { ...old, x: 8, updated_at: '2026-01-02T00:00:00Z' }
+  mock.placements = [saved]
+  await act(async () => latest!.upsertPlacement({ placement: saved, model, name: 'Chair' }))
+  const afterSave = history.length
+  assert.match(JSON.stringify(renderer.toJSON()), /placed:8/)
+  await act(async () => { release(); await settle() })
+  assert.ok(history.slice(afterSave).every(value => value === 'placed:8'), 'stale snapshot never flashes the old position')
+  assert.equal(mock.channels.size, 1, 'background refresh retains the existing subscription')
+  await act(async () => renderer.unmount())
+})
+
+test('two mounted room clients converge through realtime after a local update and removal', async () => {
+  mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
+  const placed = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+    rotation: 0 as const, updated_at: '2026-01-01T00:00:00Z' }
+  mock.placements = [placed]
+  let first: ReturnType<typeof useSharedRoom> | null = null
+  let second: ReturnType<typeof useSharedRoom> | null = null
+  let renderer: any
+  await act(async () => { renderer = create(<AuthProvider>
+    <RoomControlProbe observe={state => { first = state }} />
+    <RoomControlProbe observe={state => { second = state }} />
+  </AuthProvider>); await settle() })
+  assert.equal(mock.channels.size, 2)
+  const moved = { ...placed, x: 8, updated_at: '2026-01-02T00:00:00Z' }
+  mock.placements = [moved]
+  await act(async () => first!.upsertPlacement({ ...first!.data!.instances[0], placement: moved }))
+  assert.equal(first!.data!.instances[0].placement.x, 8)
+  assert.equal(second!.data!.instances[0].placement.x, 2)
+  await act(async () => { mock.emitRealtime('placed_furniture', 'UPDATE', moved); await settle() })
+  assert.equal(second!.data!.instances[0].placement.x, 8)
+  assert.equal(first!.data!.instances.length, 1)
+  mock.placements = []
+  await act(async () => first!.removePlacement('placed'))
+  await act(async () => { mock.emitRealtime('placed_furniture', 'DELETE', { id: 'placed' }); await settle() })
+  assert.equal(first!.data!.instances.length, 0)
+  assert.equal(second!.data!.instances.length, 0)
+  await act(async () => renderer.unmount())
+  assert.equal(mock.channels.size, 0)
 })
 
 test('auth identity changes dispose the old home subscription before creating another', async () => {

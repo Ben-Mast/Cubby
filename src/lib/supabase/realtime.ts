@@ -3,23 +3,32 @@
 import { supabase } from '../../lib/supabase/client'
 
 export type SharedTable = 'furniture' | 'placed_furniture'
+export interface HomeChange {
+  table: SharedTable
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE'
+  new: Record<string, unknown>
+  old: Record<string, unknown>
+}
 export interface HomeSubscription { unsubscribe: () => Promise<void> }
 let channelSequence = 0
 
 /** One channel owns all events needed by a mounted shared-home view. */
 export function subscribeToHomeChanges(
-  scope: string, homeId: string, tables: readonly SharedTable[], onChange: () => void,
+  scope: string, homeId: string, tables: readonly SharedTable[], onChange: (change: HomeChange) => void,
   onReconnect: () => void, onStatusError: () => void,
 ): HomeSubscription {
   let active = true
   let subscribedOnce = false
   const channel = supabase.channel(`cubby:${scope}:${homeId}:${++channelSequence}`)
   for (const table of tables) {
-    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: `home_id=eq.${homeId}` }, onChange)
-    channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: `home_id=eq.${homeId}` }, onChange)
-    // Postgres Changes cannot reliably filter DELETE payloads. Consumers only
-    // reconcile IDs from their authoritative, RLS-scoped snapshot.
-    channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table }, onChange)
+    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: `home_id=eq.${homeId}` }, payload =>
+      onChange({ table, eventType: 'INSERT', new: payload.new as Record<string, unknown>, old: {} }))
+    channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: `home_id=eq.${homeId}` }, payload =>
+      onChange({ table, eventType: 'UPDATE', new: payload.new as Record<string, unknown>, old: {} }))
+    // Postgres Changes cannot reliably filter DELETE payloads. Consumers remove
+    // known IDs or refetch their RLS-scoped snapshot when the payload lacks one.
+    channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table }, payload =>
+      onChange({ table, eventType: 'DELETE', new: {}, old: payload.old as Record<string, unknown> }))
   }
   channel.subscribe(status => {
     if (!active) return
