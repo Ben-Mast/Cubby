@@ -1,6 +1,6 @@
 import { supabase } from '../../lib/supabase/client'
 import { fetchCurrentHome } from '../home/currentHome'
-import { deserializeModel, serializeModel, type VoxelData, type VoxelModel } from '../voxel/model'
+import { DEFAULT_VOXEL_SIZE, deserializeModel, serializeModel, validVoxelSize, type VoxelData, type VoxelModel, type VoxelSize } from '../voxel/model'
 
 export interface FurnitureSummary {
   id: string; home_id: string; creator_id: string; name: string; created_at: string; updated_at: string
@@ -8,9 +8,10 @@ export interface FurnitureSummary {
 }
 export interface FurnitureRecord {
   id: string; home_id: string; creator_id: string; name: string; voxel_data: VoxelData
+  size_x: number; size_y: number; size_z: number
   created_at: string; updated_at: string
 }
-const recordColumns = 'id, home_id, creator_id, name, voxel_data, created_at, updated_at'
+const recordColumns = 'id, home_id, creator_id, name, voxel_data, size_x, size_y, size_z, created_at, updated_at'
 // Used by room reads after resolving the authenticated home. RLS still applies.
 export async function getFurnitureDefinitions(homeId: string, ids: readonly string[]): Promise<FurnitureRecord[]> {
   const uniqueIds = [...new Set(ids)]
@@ -20,10 +21,12 @@ export async function getFurnitureDefinitions(homeId: string, ids: readonly stri
   if (error) throw new Error('Unable to load room furniture designs. Check your connection and retry.')
   return (data ?? []) as FurnitureRecord[]
 }
-export function validateFurniture(name: string, model: VoxelModel) {
+export function validateFurniture(name: string, model: VoxelModel, size: VoxelSize = DEFAULT_VOXEL_SIZE) {
   if (!name.trim()) throw new Error('Enter a furniture name.')
   if (!model.size) throw new Error('Add at least one voxel before saving.')
-  return { name: name.trim(), voxel_data: JSON.parse(serializeModel(model)) as VoxelData }
+  if (!validVoxelSize(size)) throw new Error('Choose valid furniture dimensions.')
+  return { name: name.trim(), voxel_data: JSON.parse(serializeModel(model, size)) as VoxelData,
+    size_x: size[0], size_y: size[1], size_z: size[2] }
 }
 export async function listFurniture(): Promise<FurnitureSummary[]> {
   const home = await fetchCurrentHome()
@@ -43,10 +46,13 @@ export async function getFurniture(id: string): Promise<FurnitureRecord> {
   if (error) throw new Error('Unable to load furniture. Check your connection and try again.')
   if (!data) throw new Error('This furniture no longer exists or is not accessible.')
   deserializeModel(JSON.stringify(data.voxel_data))
+  const storedSize = [data.size_x, data.size_y, data.size_z]
+  if (data.voxel_data.size.some((value, index) => storedSize[index] !== undefined && value !== storedSize[index]))
+    throw new Error('Furniture dimensions do not match its voxel data.')
   return data
 }
-export async function createFurniture(name: string, model: VoxelModel): Promise<FurnitureRecord> {
-  const values = validateFurniture(name, model)
+export async function createFurniture(name: string, model: VoxelModel, size: VoxelSize = DEFAULT_VOXEL_SIZE): Promise<FurnitureRecord> {
+  const values = validateFurniture(name, model, size)
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) throw new Error('Sign in before saving furniture.')
   const home = await fetchCurrentHome()
@@ -55,8 +61,8 @@ export async function createFurniture(name: string, model: VoxelModel): Promise<
   if (error || !data) throw new Error('Unable to confirm the save. Check your connection and the library before retrying.')
   return data
 }
-export async function updateFurniture(id: string, name: string, model: VoxelModel): Promise<FurnitureRecord> {
-  const values = validateFurniture(name, model)
+export async function updateFurniture(id: string, name: string, model: VoxelModel, size: VoxelSize = DEFAULT_VOXEL_SIZE): Promise<FurnitureRecord> {
+  const values = validateFurniture(name, model, size)
   const home = await fetchCurrentHome()
   // Ownership/home stay unchanged; the existing trigger owns updated_at.
   const { data, error } = await supabase.from('furniture').update(values)

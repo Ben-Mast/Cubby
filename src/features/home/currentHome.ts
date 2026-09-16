@@ -4,6 +4,11 @@ export interface SharedHome {
   id: string
   name: string
   created_at: string
+  width: number
+  depth: number
+  height: number
+  floor_surface_id: string | null
+  wall_surface_id: string | null
 }
 
 export async function fetchCurrentHome(): Promise<SharedHome> {
@@ -17,7 +22,7 @@ export async function fetchCurrentHome(): Promise<SharedHome> {
   if (!membership) throw new Error('No shared home is assigned to this account. Ask the developer to run the setup SQL.')
 
   const { data: home, error: homeError } = await supabase
-    .from('homes').select('id, name, created_at').eq('id', membership.home_id)
+    .from('homes').select('id, name, created_at, width, depth, height, floor_surface_id, wall_surface_id').eq('id', membership.home_id)
     .single<SharedHome>()
   if (homeError || !home) throw new Error('Unable to load your shared home. Check your connection and database setup.')
   return home

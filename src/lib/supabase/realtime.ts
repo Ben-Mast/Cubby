@@ -2,7 +2,7 @@
 // substitute the same Supabase mock used by every data-access module.
 import { supabase } from '../../lib/supabase/client'
 
-export type SharedTable = 'furniture' | 'placed_furniture'
+export type SharedTable = 'furniture' | 'placed_furniture' | 'homes' | 'surfaces'
 export interface HomeChange {
   table: SharedTable
   eventType: 'INSERT' | 'UPDATE' | 'DELETE'
@@ -21,9 +21,10 @@ export function subscribeToHomeChanges(
   let subscribedOnce = false
   const channel = supabase.channel(`cubby:${scope}:${homeId}:${++channelSequence}`)
   for (const table of tables) {
-    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter: `home_id=eq.${homeId}` }, payload =>
+    const filter = table === 'homes' ? `id=eq.${homeId}` : `home_id=eq.${homeId}`
+    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table, filter }, payload =>
       onChange({ table, eventType: 'INSERT', new: payload.new as Record<string, unknown>, old: {} }))
-    channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: `home_id=eq.${homeId}` }, payload =>
+    channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter }, payload =>
       onChange({ table, eventType: 'UPDATE', new: payload.new as Record<string, unknown>, old: {} }))
     // Postgres Changes cannot reliably filter DELETE payloads. Consumers remove
     // known IDs or refetch their RLS-scoped snapshot when the payload lacks one.

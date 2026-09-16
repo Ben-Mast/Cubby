@@ -75,3 +75,21 @@ test('editor cycles Stroke/Rectangle brushes and commits each rectangle as one h
   await click('Undo'); assert.equal(scene().model.size, 4)
   await act(async () => renderer.unmount())
 })
+
+test('editor dimensions are editable and cannot shrink over occupied voxels', async () => {
+  let renderer: any
+  await act(async () => { renderer = create(<MemoryRouter><LocalVoxelEditor /></MemoryRouter>) })
+  const scene = () => renderer.root.findByType(VoxelEditorScene).props
+  const input = (axis: string) => renderer.root.findByProps({ 'aria-label': `Furniture ${axis}` })
+  await act(async () => input('width').props.onChange({ target: { value: '5' } }))
+  await act(async () => input('height').props.onChange({ target: { value: '4' } }))
+  assert.deepEqual(scene().size, [5, 4, 16])
+  await act(async () => { scene().onStrokeStart(); scene().onStrokeEdit({ x: 4, y: 3, z: 0 }); scene().onStrokeEnd() })
+  await act(async () => input('width').props.onChange({ target: { value: '4' } }))
+  assert.equal(input('width').props.value, 5)
+  assert.match(JSON.stringify(renderer.toJSON()), /Remove voxels outside/)
+  await act(async () => input('width').props.onChange({ target: { value: '6' } }))
+  assert.equal(renderer.root.findByProps({ 'aria-label': 'Undo' }).props.disabled, true,
+    'resizing clears voxel history that may contain cells outside a later workspace')
+  await act(async () => renderer.unmount())
+})

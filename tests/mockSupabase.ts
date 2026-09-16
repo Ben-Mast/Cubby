@@ -10,10 +10,13 @@ export const mock = {
   logoutCalls: [] as any[],
   queryCalls: [] as any[],
   membership: { home_id: 'shared-home' } as any,
-  home: { id: 'shared-home', name: 'Our Cubby', created_at: '2026-09-15T00:00:00Z' } as any,
+  home: { id: 'shared-home', name: 'Our Cubby', created_at: '2026-09-15T00:00:00Z', width: 64, depth: 64, height: 16,
+    floor_surface_id: null, wall_surface_id: null } as any,
   membershipError: null as any,
   homeError: null as any,
   furniture: new Map<string, any>(),
+  surfaces: new Map<string, any>(),
+  surfacesError: null as any,
   placedCounts: new Map<string, number>(),
   furnitureError: null as any,
   countError: null as any,
@@ -33,9 +36,10 @@ export const mock = {
     this.logoutCalls = []
     this.queryCalls = []
     this.membership = { home_id: 'shared-home' }
-    this.home = { id: 'shared-home', name: 'Our Cubby', created_at: '2026-09-15T00:00:00Z' }
+    this.home = { id: 'shared-home', name: 'Our Cubby', created_at: '2026-09-15T00:00:00Z', width: 64, depth: 64, height: 16,
+      floor_surface_id: null, wall_surface_id: null }
     this.membershipError = this.homeError = null
-    this.furniture.clear(); this.placedCounts.clear()
+    this.furniture.clear(); this.surfaces.clear(); this.surfacesError = null; this.placedCounts.clear()
     this.furnitureError = this.countError = null
     this.placements = []; this.roomError = null; this.roomReadGate = null
     this.channels.clear()
@@ -48,8 +52,8 @@ export const mock = {
   emitRealtime(table: string, eventType: 'INSERT' | 'UPDATE' | 'DELETE', row: any) {
     for (const channel of this.channels) for (const binding of channel.bindings) {
       if (binding.filter.table !== table || binding.filter.event !== eventType) continue
-      const expectedHome = binding.filter.filter?.replace('home_id=eq.', '')
-      if (expectedHome && row.home_id !== expectedHome) continue
+      const expectedHome = binding.filter.filter?.replace('home_id=eq.', '').replace('id=eq.', '')
+      if (expectedHome && (table === 'homes' ? row.id : row.home_id) !== expectedHome) continue
       binding.callback({ eventType, new: eventType === 'DELETE' ? {} : row, old: eventType === 'DELETE' ? row : {} })
     }
   },
@@ -84,6 +88,30 @@ export const supabase = {
         if (call.operation === 'delete') mock.placements = mock.placements.filter(row => !rows.includes(row))
         return { data: rows, error: null }
       }
+      if (table === 'homes') {
+        if (mock.homeError) return { data: null, error: mock.homeError }
+        if (call.operation === 'update' && call.filters.every(([column, value]) => mock.home[column] === value)) Object.assign(mock.home, call.values)
+        return { data: [mock.home], error: null }
+      }
+      if (table === 'surfaces') {
+        if (mock.surfacesError) return { data: null, error: mock.surfacesError }
+        const matches = (row: any) => call.filters.every(([column, value]) => row[column] === value) &&
+          call.inFilters.every(([column, values]) => values.includes(row[column]))
+        if (call.operation === 'insert') {
+          const id = `surface-${mock.nextId++}`
+          const row = { id, ...call.values, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
+          mock.surfaces.set(id, row)
+          return { data: [row], error: null }
+        }
+        const rows = [...mock.surfaces.values()].filter(matches)
+        if (call.operation === 'update') for (const row of rows) Object.assign(row, call.values, { updated_at: '2026-09-15T01:00:00Z' })
+        if (call.operation === 'delete') for (const row of rows) {
+          mock.surfaces.delete(row.id)
+          if (mock.home.floor_surface_id === row.id) mock.home.floor_surface_id = null
+          if (mock.home.wall_surface_id === row.id) mock.home.wall_surface_id = null
+        }
+        return { data: rows.map(row => ({ ...row, creator: { display_name: mock.creatorNames[row.creator_id] ?? 'Ben' } })), error: null }
+      }
       if (mock.furnitureError) return { data: null, error: mock.furnitureError }
       const matches = (row: any) => call.filters.every(([column, value]) => row[column] === value) && call.inFilters.every(([column, values]) => values.includes(row[column]))
       if (call.operation === 'insert') {
@@ -116,7 +144,9 @@ export const supabase = {
         const result = execute(); return { data: result.data?.[0] ?? null, error: result.error }
       },
       async single() {
-        if (table === 'homes') return { data: mock.home, error: mock.homeError }
+        if (table === 'homes') return call.operation === 'update'
+          ? { data: execute().data?.[0] ?? null, error: mock.homeError }
+          : { data: mock.home, error: mock.homeError }
         const result = execute(); return { data: result.data?.[0] ?? null, error: result.error ?? (!result.data?.length ? { message: 'No matching row' } : null) }
       },
     }

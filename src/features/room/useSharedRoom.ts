@@ -69,7 +69,7 @@ export function useSharedRoom() {
       const coordinator = createRefetchCoordinator(
         async () => {
           const version = versionRef.current
-          return { room: await fetchSharedRoomForHome(home), version }
+          return { room: await fetchSharedRoomForHome(await fetchCurrentHome()), version }
         },
         ({ room, version }) => {
           if (version !== versionRef.current) { void coordinator.request(); return }
@@ -101,11 +101,13 @@ export function useSharedRoom() {
             models.set(row.furniture_id, definition)
           }
           if (!active || eventSequence.get(row.id) !== sequence) return
-          roomTransform(row, definition.model)
+          roomTransform(row, definition.model, dataRef.current?.home)
           upsertPlacement({ placement: row, ...definition })
         } catch { if (active) void coordinator.request() }
       }
-      const subscription = subscribeToHomeChanges('room', home.id, ['furniture', 'placed_furniture'], change => {
+      const subscription = subscribeToHomeChanges('room', home.id, ['furniture', 'placed_furniture', 'homes', 'surfaces'], change => {
+        if (change.table === 'homes') { void coordinator.request(); return }
+        if (change.table === 'surfaces') { void coordinator.request(); return }
         if (change.table === 'furniture') { void coordinator.request(); return }
         if (change.eventType === 'DELETE') {
           if (typeof change.old.id === 'string') {

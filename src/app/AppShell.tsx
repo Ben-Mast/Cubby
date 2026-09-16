@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import { Armchair, House, LogOut } from 'lucide-react'
+import { Armchair, House, LogOut, Paintbrush } from 'lucide-react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../features/auth/AuthProvider'
 
@@ -39,6 +39,9 @@ export function AppShell() {
           </NavLink>
           <NavLink aria-label="Furniture" title="Furniture" className={({ isActive }) => isActive ? 'nav-link nav-link-active' : 'nav-link'} to="/furniture">
             <Armchair aria-hidden="true" />
+          </NavLink>
+          <NavLink aria-label="Surfaces" title="Surfaces" className={({ isActive }) => isActive ? 'nav-link nav-link-active' : 'nav-link'} to="/surfaces">
+            <Paintbrush aria-hidden="true" />
           </NavLink>
           {headerAction?.content}
           <button className="nav-link nav-button" aria-label="Log out" title="Log out" disabled={loggingOut} onClick={() => void logout()}>

@@ -276,5 +276,68 @@ test('migration/setup execute and enforce API grants, RLS, constraints, and casc
       const tables = (await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime' order by tablename")).rows
       assert.deepEqual(tables, [{ tablename: 'furniture' }, { tablename: 'placed_furniture' }])
     })
+    await t.test('configurable dimensions migrate defaults, enforce resize bounds and member grants', async () => {
+      const small = { version: 1, size: [4, 3, 2], voxels: [{ x: 3, y: 2, z: 1, color: '#ffffff' }] }
+      const existing = { version: 1, size: [16, 16, 16], voxels: [{ x: 0, y: 0, z: 0, color: '#ffffff' }] }
+      const oldId = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4) returning id',
+        [homeId, userOne, 'Existing', JSON.stringify(existing)])).rows[0].id
+      const file = readFileSync('supabase/migrations/202609160003_configurable_dimensions.sql', 'utf8')
+      await db.exec(file)
+      assert.deepEqual((await db.query('select width,depth,height from public.homes where id=$1', [homeId])).rows[0], { width: 64, depth: 64, height: 16 })
+      assert.deepEqual((await db.query('select size_x,size_y,size_z from public.furniture where id=$1', [oldId])).rows[0], { size_x: 16, size_y: 16, size_z: 16 })
+      const tables = (await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime' order by tablename")).rows
+      assert.deepEqual(tables, [{ tablename: 'furniture' }, { tablename: 'homes' }, { tablename: 'placed_furniture' }])
+      await asRole('authenticated', userOne, async () => {
+        await db.query('update public.homes set width=80,depth=70,height=20 where id=$1', [homeId])
+        const id = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data,size_x,size_y,size_z) values ($1,$2,$3,$4,4,3,2) returning id',
+          [homeId, userOne, 'Small', JSON.stringify(small)])).rows[0].id
+        await denied('update public.furniture set size_x=5 where id=$1', [id], '23514')
+        await db.query('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,79,0,69,0,$3)',
+          [homeId, id, userOne])
+        await denied('update public.homes set width=79 where id=$1', [homeId], '23514')
+        await denied('update public.homes set depth=69 where id=$1', [homeId], '23514')
+        await db.query('update public.homes set width=81,depth=71 where id=$1', [homeId])
+        await denied('update public.homes set name=$1 where id=$2', ['No', homeId])
+      })
+      await asRole('authenticated', outsider, async () => {
+        assert.equal((await db.query('update public.homes set width=100 where id=$1 returning id', [homeId])).rows.length, 0)
+      })
+      await db.query('delete from public.furniture where home_id=$1', [homeId])
+    })
+    await t.test('shared surfaces enforce membership, valid pixels, typed application and delete reset', async () => {
+      await db.exec(readFileSync('supabase/migrations/202609160004_shared_surfaces.sql', 'utf8'))
+      assert.equal((await db.query("select relrowsecurity from pg_class where oid='public.surfaces'::regclass")).rows[0].relrowsecurity, true)
+      const pixels = JSON.stringify({ version: 1, pixels: ['#ffffff', '#34323c', '#ffffff', '#34323c'] })
+      let floorId, wallId
+      await asRole('authenticated', userOne, async () => {
+        floorId = (await db.query("insert into public.surfaces(home_id,creator_id,name,type,pixel_data,width,height) values ($1,$2,'Tiles','floor',$3,2,2) returning id",
+          [homeId, userOne, pixels])).rows[0].id
+        wallId = (await db.query("insert into public.surfaces(home_id,creator_id,name,type,pixel_data,width,height) values ($1,$2,'Stripes','wall',$3,2,2) returning id",
+          [homeId, userOne, pixels])).rows[0].id
+        await denied("insert into public.surfaces(home_id,creator_id,name,type,pixel_data,width,height) values ($1,$2,'Bad','floor',$3,2,2)",
+          [homeId, userOne, JSON.stringify({ version: 1, pixels: ['#ffffff'] })], '23514')
+        await denied("insert into public.surfaces(home_id,creator_id,name,type,pixel_data,width,height) values ($1,$2,'Null','floor',$3,2,2)",
+          [homeId, userOne, JSON.stringify({ version: 1, pixels: ['#ffffff', null, '#ffffff', '#ffffff'] })], '23514')
+        await denied("insert into public.surfaces(home_id,creator_id,name,type,pixel_data,width,height) values ($1,$2,'Spoof','floor',$3,2,2)",
+          [homeId, userTwo, pixels])
+        await denied('update public.surfaces set type=$1 where id=$2', ['wall', floorId])
+        await denied('update public.homes set floor_surface_id=$1 where id=$2', [wallId, homeId], '23514')
+        await db.query('update public.homes set floor_surface_id=$1,wall_surface_id=$2 where id=$3', [floorId, wallId, homeId])
+      })
+      await asRole('authenticated', userTwo, async () => {
+        assert.equal((await db.query('select id from public.surfaces where home_id=$1', [homeId])).rows.length, 2)
+        await db.query("update public.surfaces set name='New tiles' where id=$1", [floorId])
+        assert.deepEqual((await db.query('select floor_surface_id,wall_surface_id from public.homes where id=$1', [homeId])).rows[0],
+          { floor_surface_id: floorId, wall_surface_id: wallId })
+        await db.query('delete from public.surfaces where id=$1', [floorId])
+        assert.equal((await db.query('select floor_surface_id from public.homes where id=$1', [homeId])).rows[0].floor_surface_id, null)
+      })
+      await asRole('authenticated', outsider, async () => {
+        assert.equal((await db.query('select id from public.surfaces where home_id=$1', [homeId])).rows.length, 0)
+        assert.equal((await db.query('update public.homes set wall_surface_id=null where id=$1 returning id', [homeId])).rows.length, 0)
+      })
+      await asRole('anon', null, async () => denied('select * from public.surfaces'))
+      assert.ok((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows.some(row => row.tablename === 'surfaces'))
+    })
   } finally { await db.close() }
 })

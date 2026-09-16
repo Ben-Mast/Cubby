@@ -22,7 +22,7 @@ test('PWA configuration has installable manifest metadata and raster icon fallba
 
 test('production routes, Cloudflare SPA fallback, mobile targets and env contract stay explicit', () => {
   const app = text('src/app/App.tsx')
-  for (const route of ['/', '/login', '/room', '/furniture', '/furniture/new', '/furniture/:id/edit', '/settings']) {
+  for (const route of ['/', '/login', '/room', '/furniture', '/furniture/new', '/furniture/:id/edit', '/surfaces', '/surfaces/new', '/surfaces/:id/edit', '/settings']) {
     assert.match(app, new RegExp(`path=["']${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`))
   }
   assert.match(app, /path="\/settings" element={<Navigate to="\/room" replace/)

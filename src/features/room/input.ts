@@ -1,5 +1,6 @@
 import { Plane, Raycaster, Vector2, Vector3, type Camera, type Object3D } from 'three'
 import { snapFloorPoint } from './placement'
+import { DEFAULT_ROOM_DIMENSIONS, type RoomDimensions } from './config'
 
 type ViewRect = Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>
 const raycaster = new Raycaster()
@@ -11,9 +12,9 @@ function pointerRay(x: number, y: number, rect: ViewRect, camera: Camera) {
   raycaster.setFromCamera(pointer, camera)
   return raycaster
 }
-export function pickRoomPosition(x: number, y: number, rect: ViewRect, camera: Camera) {
+export function pickRoomPosition(x: number, y: number, rect: ViewRect, camera: Camera, dimensions: RoomDimensions = DEFAULT_ROOM_DIMENSIONS) {
   const point = pointerRay(x,y,rect,camera).ray.intersectPlane(floorPlane, intersection)
-  return point ? snapFloorPoint(point.x,point.z) : null
+  return point ? snapFloorPoint(point.x,point.z,dimensions) : null
 }
 export function pickRoomItem(x: number, y: number, rect: ViewRect, camera: Camera, scene: Object3D): string | null {
   for (const hit of pointerRay(x,y,rect,camera).intersectObject(scene,true)) {

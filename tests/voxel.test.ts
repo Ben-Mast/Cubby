@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, PerspectiveCamera, Plane, Vector3 } from 'three'
 import { coordinateKey, deserializeModel, editModel, editRectangle, emptyHistory, historyReducer, HISTORY_LIMIT, inBounds, serializeModel, type VoxelModel } from '../src/features/voxel/model'
-import { cameraPlaneAxis, floorTarget, interpolateCoordinates, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview, voxelPlaneTarget } from '../src/features/voxel/targeting'
+import { cameraPlaneAxis, floorTarget, interpolateCoordinates, pickFaceTarget, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview, strokeCoordinates, voxelPlaneTarget } from '../src/features/voxel/targeting'
 import { bindPrimaryPointerInput } from '../src/features/voxel/input'
 
 const at = { x: 8, y: 0, z: 8 }
@@ -86,6 +86,45 @@ test('actual Three raycast picks instance faces and floor, not empty air', () =>
   assert.equal(pickStrokeStart(250, 250, rect, camera, mesh, [], 'add'), null)
   mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose()
 })
+test('stroke follows the actual voxel face under each sample while rectangle keeps camera plane targeting', () => {
+  const camera = new PerspectiveCamera(45, 1, 0.1, 150)
+  const voxel = { x: 8, y: 8, z: 8, color: brown }
+  const center = new Vector3(0.5, 8.5, 0.5)
+  const mesh = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial(), 1)
+  mesh.setMatrixAt(0, new Matrix4().makeTranslation(...center.toArray()))
+  mesh.computeBoundingSphere(); mesh.updateMatrixWorld()
+  const rect = { left: 0, top: 0, width: 500, height: 500 } as DOMRect
+  const sample = (position: Vector3, mode: 'add' | 'delete' | 'paint') => {
+    camera.position.copy(position); camera.lookAt(center); camera.updateMatrixWorld()
+    return pickFaceTarget(250, 250, rect, camera, mesh, [voxel], mode)
+  }
+  const top = sample(new Vector3(0.5, 20, 0.5), 'add')
+  assert.deepEqual(top, { at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' })
+  assert.deepEqual(sample(new Vector3(20, 8.5, 0.5), 'add'), { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9' })
+  assert.deepEqual(sample(new Vector3(-20, 8.5, 0.5), 'add'), { at: { x: 7, y: 8, z: 8 }, face: 'x:-1:7' })
+  assert.deepEqual(sample(new Vector3(0.5, 8.5, 20), 'add'), { at: { x: 8, y: 8, z: 9 }, face: 'z:1:9' })
+  assert.deepEqual(sample(new Vector3(0.5, 8.5, -20), 'add'), { at: { x: 8, y: 8, z: 7 }, face: 'z:-1:7' })
+  assert.deepEqual(sample(new Vector3(20, 8.5, 0.5), 'delete')?.at, { x: 8, y: 8, z: 8 })
+  assert.deepEqual(sample(new Vector3(0.5, 8.5, 20), 'paint')?.at, { x: 8, y: 8, z: 8 })
+  camera.position.set(20, 8.5, 0.5); camera.lookAt(center); camera.updateMatrixWorld()
+  assert.equal(pickStrokeStart(250, 250, rect, camera, mesh, [voxel], 'add')?.lockedAxis, 'x')
+  assert.deepEqual(strokeCoordinates({ at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' },
+    { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9' }), [{ x: 9, y: 8, z: 8 }], 'crossing faces does not draw through the model')
+  assert.deepEqual(strokeCoordinates({ at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' },
+    { at: { x: 11, y: 9, z: 8 }, face: 'y:1:9' }), [
+    { x: 9, y: 9, z: 8 }, { x: 10, y: 9, z: 8 }, { x: 11, y: 9, z: 8 },
+  ])
+  mesh.setMatrixAt(0, new Matrix4().makeTranslation(7.5, 8.5, 0.5))
+  mesh.computeBoundingSphere(); mesh.updateMatrixWorld()
+  camera.position.set(20, 8.5, 0.5); camera.lookAt(7.5, 8.5, 0.5); camera.updateMatrixWorld()
+  assert.equal(pickFaceTarget(250, 250, rect, camera, mesh, [{ ...voxel, x: 15 }], 'add'), null,
+    'the outward face at the editor edge cannot create an out-of-bounds voxel')
+  mesh.count = 0; mesh.computeBoundingSphere()
+  camera.position.set(0.5, 20, 0.5); camera.lookAt(0.5, 0, 0.5); camera.updateMatrixWorld()
+  assert.deepEqual(pickFaceTarget(250, 250, rect, camera, mesh, [], 'add')?.at, { x: 8, y: 0, z: 8 })
+  assert.equal(pickFaceTarget(250, 250, rect, camera, mesh, [], 'paint'), null)
+  mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose()
+})
 test('undo/redo covers add, paint, delete, clear and restore; edits branch history', () => {
   let state = emptyHistory()
   const states = [state.present]
@@ -135,7 +174,7 @@ test('deserialization rejects invalid format, colors, out-of-bounds and duplicat
       [{ ...voxel, color: 'red' }], [null]].map(voxels => ({ version: 1, size: [16,16,16], voxels }))])
     assert.throws(() => deserializeModel(JSON.stringify(data)))
 })
-test('stroke interpolation fills fast pointer samples and locked raycasts stay in one plane', () => {
+test('stroke interpolation fills fast samples while rectangle raycasts stay in one plane', () => {
   assert.deepEqual(interpolateCoordinates({ x: 1,y: 2,z: 3 }, { x: 5,y: 2,z: 3 }), [
     { x: 2,y: 2,z: 3 }, { x: 3,y: 2,z: 3 }, { x: 4,y: 2,z: 3 }, { x: 5,y: 2,z: 3 },
   ])
@@ -219,4 +258,18 @@ test('one continuous stroke is one undo/redo history entry', () => {
   assert.equal(state.past.length, 1)
   state = historyReducer(state, { type: 'undo' }); assert.equal(state.present.size, 0)
   state = historyReducer(state, { type: 'redo' }); assert.equal(state.present.size, 4)
+})
+
+test('per-item dimensions govern edits, rectangle bounds, and serialization', () => {
+  const size: [number, number, number] = [4, 3, 5]
+  let model = editModel(new Map(), 'add', { x: 3, y: 2, z: 4 }, brown, size)
+  assert.equal(model.size, 1)
+  assert.equal(editModel(model, 'add', { x: 4, y: 2, z: 4 }, brown, size), model)
+  const cells = rectangleCoordinates({ x: 1, y: 2, z: 3 }, { x: 6, y: 2, z: 7 }, 'y', size)
+  assert.equal(cells.length, 6)
+  model = editRectangle(model, 'add', cells, brown, size)
+  const json = serializeModel(model, size)
+  assert.deepEqual(JSON.parse(json).size, size)
+  assert.equal(deserializeModel(json).size, 6)
+  assert.throws(() => serializeModel(model, [2, 2, 2]), /in-bounds/)
 })

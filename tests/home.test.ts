@@ -15,7 +15,7 @@ test('home lookup filters by authenticated UUID and reads the membership home', 
   assert.deepEqual(await fetchCurrentHome(), mock.home)
   assert.deepEqual(mock.queryCalls.map(({ table, columns, filter }) => ({ table, columns, filter })), [
     { table: 'home_members', columns: 'home_id', filter: ['user_id', 'approved-user'] },
-    { table: 'homes', columns: 'id, name, created_at', filter: ['id', 'shared-home'] },
+    { table: 'homes', columns: 'id, name, created_at, width, depth, height, floor_surface_id, wall_surface_id', filter: ['id', 'shared-home'] },
   ])
 })
 

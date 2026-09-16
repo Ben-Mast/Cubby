@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { useState } from 'react'
 import { act, create } from 'react-test-renderer'
 import { MemoryRouter } from 'react-router-dom'
-import { lowestRestingPosition, placementBounds, rotate90, snapFloorPoint, validatePlacement, worldVoxels } from '../src/features/room/placement'
+import { lowestRestingPosition, placementBounds, rotate90, snapFloorPoint, validatePlacement, validateRoomResize, worldVoxels } from '../src/features/room/placement'
 import { reconstructRoomModel, type RoomInstance } from '../src/features/room/model'
-import { createPlacement, fetchSharedRoom, removePlacement, updatePlacement } from '../src/features/room/data'
+import { createPlacement, fetchSharedRoom, removePlacement, updatePlacement, updateRoomDimensions } from '../src/features/room/data'
 import { RoomWorkspace } from '../src/routes/RoomPage'
 import { mock } from './mockSupabase'
 import { PerspectiveCamera, Vector3, Scene, Group, Mesh, BoxGeometry, MeshBasicMaterial } from 'three'
@@ -33,6 +33,28 @@ test('floor points snap deterministically to integer cells without hiding outsid
   assert.deepEqual(snapFloorPoint(0.25, 0), { x: 33,z: 32 })
   let rotation = position.rotation as 0 | 90 | 180 | 270
   for (const expected of [90,180,270,0]) { rotation = rotate90(rotation); assert.equal(rotation, expected) }
+})
+test('custom room dimensions affect floor snapping, placement, stacking and safe shrink', () => {
+  const dimensions = { width: 8, depth: 10, height: 4 }
+  assert.deepEqual(snapFloorPoint(0, 0, dimensions), { x: 4, z: 5 })
+  const cube = reconstructRoomModel({ version: 1, size: [3, 2, 4], voxels: [{ x: 2, y: 1, z: 3, color: '#ffffff' }] })
+  const at = { x: 7, y: 0, z: 9, rotation: 0 as const }
+  const placed = { model: cube, placement: { ...instance.placement, ...at } }
+  assert.equal(validatePlacement(cube, at, [], undefined, dimensions), null)
+  assert.match(validatePlacement(cube, { ...at, x: 8 }, [], undefined, dimensions)!, /inside/)
+  assert.equal(lowestRestingPosition(cube, 7, 9, 0, [], undefined, dimensions)?.y, 0)
+  assert.match(validateRoomResize([placed], { ...dimensions, width: 7 })!, /outside/)
+  assert.equal(validateRoomResize([placed], { ...dimensions, width: 9 }), null)
+})
+test('room resize saves through the shared home and rejects occupied voxels outside a shrink', async () => {
+  setup()
+  mock.furniture.set('tiny', { ...design, id: 'tiny', voxel_data: { version: 1, size: [2, 2, 2],
+    voxels: [{ x: 0, y: 0, z: 0, color: '#ffffff' }] } })
+  mock.placements = [{ id: 'at-edge', home_id: 'shared-home', furniture_id: 'tiny', x: 63, y: 0, z: 63, rotation: 0 }]
+  const grown = await updateRoomDimensions({ width: 80, depth: 70, height: 20 })
+  assert.deepEqual([grown.width, grown.depth, grown.height], [80, 70, 20])
+  await assert.rejects(updateRoomDimensions({ width: 63, depth: 70, height: 20 }), /outside/)
+  assert.equal(mock.home.width, 80)
 })
 test('actual room rays target floor independent of furniture height and resolve model selection tags', () => {
   const camera = new PerspectiveCamera(45,1,0.1,100)
@@ -128,7 +150,7 @@ test('writes revalidate latest room/geometry, reject invalid or unavailable data
 
 test('workspace placement, invalid feedback, cancellation, camera isolation, move, rotation and removal', async () => {
   let renderer: any
-  let room = { home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [] as RoomInstance[],furniture: [],warnings: [] }
+  let room = { home: { id: 'shared-home',name: 'Home',created_at: '',width: 64,depth: 64,height: 16 },instances: [] as RoomInstance[],furniture: [],warnings: [] }
   let picked: typeof design | null = design
   let calls: any[] = []
   const row = { ...instance.placement }
@@ -178,7 +200,7 @@ test('drag preview rises onto support, drops back to floor, and writes only at r
   const calls: any[] = []
   let renderer: any
   await act(async () => { renderer = create(<MemoryRouter><RoomWorkspace
-    room={{ home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [table,item],furniture: [],warnings: [] }}
+    room={{ home: { id: 'shared-home',name: 'Home',created_at: '',width: 64,depth: 64,height: 16 },instances: [table,item],furniture: [],warnings: [] }}
     design={null} refresh={() => {}} clearDesign={() => {}} chooseFurniture={() => {}}
     actions={{ create: createPlacement,remove: removePlacement,
       update: async (...args: any[]) => { calls.push(args); return { ...item.placement,...args[2] } } } as any} /></MemoryRouter>) })
@@ -207,7 +229,7 @@ test('slow placement saves keep preview or same-ID furniture visible without a s
     remove: () => { writes++; return new Promise<void>(resolve => { finishRemove = resolve }) },
   }
   function Harness() {
-    const [room, setRoom] = useState({ home: { id: 'shared-home', name: 'Home', created_at: '' },
+    const [room, setRoom] = useState({ home: { id: 'shared-home', name: 'Home', created_at: '',width: 64,depth: 64,height: 16 },
       instances: [] as RoomInstance[], furniture: [], warnings: [] })
     const [picked, setPicked] = useState<typeof design | null>(design)
     remoteUpsert = item => setRoom(current => ({ ...current, instances: [...current.instances.filter(existing =>
@@ -287,7 +309,7 @@ test('placement failures retain the draft, refetch authoritative state, and bloc
     update: updatePlacement,remove: removePlacement,
   }
   await act(async () => { renderer = create(<MemoryRouter><RoomWorkspace
-    room={{ home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [],furniture: [],warnings: [] }}
+    room={{ home: { id: 'shared-home',name: 'Home',created_at: '',width: 64,depth: 64,height: 16 },instances: [],furniture: [],warnings: [] }}
     design={design} refresh={() => { refreshes++ }} clearDesign={() => {}} chooseFurniture={() => {}} actions={actions} /></MemoryRouter>) })
   const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
   await act(async () => { button('Confirm placement').props.onClick(); button('Confirm placement').props.onClick() })

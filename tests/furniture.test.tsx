@@ -39,7 +39,7 @@ test('CRUD uses resolved home and authenticated creator; second user reads/updat
   assert.equal(updated.updated_at, '2026-09-15T01:00:00Z'); assert.equal(mock.furniture.size, 1)
   assert.deepEqual((await getFurniture(created.id)).voxel_data, JSON.parse(serializeModel(painted)))
   const update = mock.queryCalls.find(call => call.operation === 'update')
-  assert.deepEqual(Object.keys(update.values).sort(), ['name', 'voxel_data'])
+  assert.deepEqual(Object.keys(update.values).sort(), ['name', 'size_x', 'size_y', 'size_z', 'voxel_data'])
   for (const call of mock.queryCalls.filter(call => call.table === 'furniture' && call.operation !== 'insert'))
     assert.ok(call.filters.some(([column, value]: any[]) => column === 'home_id' && value === 'shared-home'))
 })

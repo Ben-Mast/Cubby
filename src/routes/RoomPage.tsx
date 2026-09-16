@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Armchair, Check, RefreshCw, RotateCw, Trash2, X } from 'lucide-react'
+import { Armchair, Check, Maximize2, Paintbrush, RefreshCw, RotateCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthProvider'
 import { getFurniture, type FurnitureRecord } from '../features/furniture/data'
 import { SharedRoomScene } from '../features/room/SharedRoomScene'
 import { useSharedRoom } from '../features/room/useSharedRoom'
-import { createPlacement, updatePlacement, removePlacement, type SharedRoomData } from '../features/room/data'
+import { createPlacement, updatePlacement, removePlacement, updateRoomDimensions, type SharedRoomData } from '../features/room/data'
+import { DEFAULT_ROOM_DIMENSIONS, MAX_ROOM_DIMENSIONS, validRoomDimensions, type RoomDimensions } from '../features/room/config'
 import { reconstructRoomModel, type PlacedFurniture, type RoomInstance, type RoomModel } from '../features/room/model'
-import { lowestRestingPosition, rotate90, validatePlacement, type PlacementPosition } from '../features/room/placement'
+import { lowestRestingPosition, rotate90, validatePlacement, validateRoomResize, type PlacementPosition } from '../features/room/placement'
 import { useHeaderAction } from '../app/AppShell'
+import { RoomSurfacePicker } from '../features/surfaces/RoomSurfacePicker'
 
-const placementActions = { create: createPlacement, update: updatePlacement, remove: removePlacement }
+const placementActions = { create: createPlacement, update: updatePlacement, remove: removePlacement, resize: updateRoomDimensions }
 interface Draft { furnitureId: string; name: string; model: RoomModel; position: PlacementPosition; movingId?: string }
 
 export function RoomPage() {
@@ -65,6 +67,9 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   const dragOffset = useRef({ x: 0, z: 0 })
   const [selectedId, setSelectedId] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [surfacePickerOpen, setSurfacePickerOpen] = useState(false)
+  const [sizeOpen, setSizeOpen] = useState(false)
+  const [roomSize, setRoomSize] = useState<RoomDimensions>(DEFAULT_ROOM_DIMENSIONS)
   const [removing, setRemoving] = useState(false)
   const [hiddenId, setHiddenId] = useState('')
   const [busy, setBusy] = useState(false)
@@ -79,13 +84,15 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
     setSelectedId(''); setRemoving(false); setPickerOpen(false); setError('')
   }, [design])
   const instances = room?.instances ?? []
+  const dimensions = room ? { width: room.home.width, depth: room.home.depth, height: room.home.height }
+    : DEFAULT_ROOM_DIMENSIONS
   const selected = instances.find(item => item.placement.id === selectedId)
   const blocked = disabled || busy || !room
-  const invalid = draft ? validatePlacement(draft.model, draft.position, instances, draft.movingId) : null
+  const invalid = draft ? validatePlacement(draft.model, draft.position, instances, draft.movingId, dimensions) : null
   const unavailable = Boolean(room?.warnings.length)
   function updateDraft(next: Draft | null) { draftRef.current = next; setDraft(next) }
   function resting(draft: Draft, x: number, z: number, rotation = draft.position.rotation): PlacementPosition {
-    return lowestRestingPosition(draft.model, x, z, rotation, instances, draft.movingId) ?? { x, y: 0, z, rotation }
+    return lowestRestingPosition(draft.model, x, z, rotation, instances, draft.movingId, dimensions) ?? { x, y: 0, z, rotation }
   }
   function cancelPlacement() { updateDraft(null); setError(''); clearDesign() }
   function select(id: string) { if (blocked || draft) return; setSelectedId(id); setRemoving(false); setError('') }
@@ -115,7 +122,7 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
     const moving: Draft = { furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture',
       model: selected.model, position: selected.placement, movingId: selected.placement.id }
     const position = resting(moving, selected.placement.x, selected.placement.z, rotate90(selected.placement.rotation))
-    const invalidRotation = validatePlacement(selected.model, position, instances, selected.placement.id)
+    const invalidRotation = validatePlacement(selected.model, position, instances, selected.placement.id, dimensions)
     if (invalidRotation) { setError(invalidRotation); return }
     updateDraft({ furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture', model: selected.model,
       position, movingId: selected.placement.id })
@@ -156,7 +163,7 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
       position.x + dragOffset.current.x, position.z + dragOffset.current.z) }
     dragOrigin.current = null
     if (!current.movingId) { updateDraft(current); return }
-    const issue = validatePlacement(current.model, current.position, instances, current.movingId)
+    const issue = validatePlacement(current.model, current.position, instances, current.movingId, dimensions)
     if (issue || unavailable) { updateDraft(null); setError(issue || 'Room data is unavailable. Refresh and try again.'); return }
     updateDraft(current)
     const movingId = current.movingId
@@ -187,9 +194,13 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
     {room?.warnings.map((warning, index) => <p role="status" className="floating-status" key={index}>{warning}</p>)}
     {busy && <p role="status" className="sr-only">Saving room changes…</p>}
     {error && <p role="alert" className="auth-error floating-status">{error}</p>}
-    <SharedRoomScene instances={visibleInstances} selectedId={selectedId}
+    <SharedRoomScene instances={visibleInstances} dimensions={dimensions} floorSurface={room?.floorSurface} wallSurface={room?.wallSurface} selectedId={selectedId}
       preview={preview} previewInvalid={Boolean(invalid) || unavailable} disabled={blocked}
       onSelect={select} onDragStart={startDrag} onDrag={dragTo} onDragEnd={endDrag} onDragCancel={cancelDrag} />
+    <button className="icon-button room-size-button" aria-label="Edit room size" title="Room size" disabled={blocked}
+      onClick={() => { setRoomSize({ width: dimensions.width, depth: dimensions.depth, height: dimensions.height }); setError(''); setSizeOpen(true) }}>
+      <Maximize2 aria-hidden="true" />
+    </button>
     <div className="bottom-toolbar room-bottom-toolbar">
       {draft && !draft.movingId ? <>
         <button aria-label="Cancel placement" title="Cancel" onClick={cancelPlacement}><X aria-hidden="true" /></button>
@@ -198,15 +209,34 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
       </> : selected ? <>
         <button aria-label="Rotate selected furniture 90 degrees" title="Rotate" disabled={busy || unavailable || removing} onClick={rotateSelected}><RotateCw aria-hidden="true" /></button>
         <button className="danger-button" aria-label="Remove selected furniture" title="Remove" disabled={busy} onClick={() => setRemoving(true)}><Trash2 aria-hidden="true" /></button>
-      </> : <button className="primary-wide" aria-label="Open furniture picker" title="Furniture" disabled={blocked} onClick={() => setPickerOpen(true)}><Armchair aria-hidden="true" /></button>}
+      </> : <>
+        <button className="primary-wide" aria-label="Open furniture picker" title="Furniture" disabled={blocked}
+          onClick={() => { setSurfacePickerOpen(false); setPickerOpen(true) }}><Armchair aria-hidden="true" /></button>
+        <button className="primary-wide" aria-label="Open surface picker" title="Surfaces" disabled={blocked}
+          onClick={() => { setPickerOpen(false); setSurfacePickerOpen(true) }}><Paintbrush aria-hidden="true" /></button>
+      </>}
     </div>
     {invalid && <p role="status" className="placement-feedback">{invalid}</p>}
+    {sizeOpen && <div className="bottom-sheet room-size-sheet" role="dialog" aria-label="Edit room size">
+      <div className="sheet-heading"><strong>Room size (voxels)</strong><button className="icon-button" aria-label="Close room size" onClick={() => setSizeOpen(false)}><X aria-hidden="true" /></button></div>
+      <div className="dimension-fields">{(['width', 'depth', 'height'] as const).map(axis => <label key={axis}>{axis}
+        <input aria-label={`Room ${axis}`} type="number" min="1" max={MAX_ROOM_DIMENSIONS[axis]} step="1"
+          value={roomSize[axis]} disabled={busy} onChange={event => setRoomSize(current => ({ ...current, [axis]: Number(event.target.value) }))} /></label>)}</div>
+      <button className="icon-button primary-icon" aria-label="Save room size" disabled={busy} onClick={() => {
+        if (!validRoomDimensions(roomSize)) { setError('Room dimensions must be whole voxels within the allowed range.'); return }
+        const issue = validateRoomResize(instances, roomSize)
+        if (issue) { setError(issue); return }
+        void mutate(() => actions.resize(roomSize), () => { setSizeOpen(false); refresh() })
+      }}><Check aria-hidden="true" /></button>
+    </div>}
     {pickerOpen && <div className="bottom-sheet furniture-sheet" role="dialog" aria-label="Choose furniture">
       <div className="sheet-heading sheet-heading-end"><button className="icon-button" aria-label="Close furniture picker" title="Close" onClick={() => setPickerOpen(false)}><X aria-hidden="true" /></button></div>
       {room?.furniture.length ? <div className="furniture-tray">{room.furniture.map(item => <button key={item.id}
         onClick={() => { setPickerOpen(false); chooseFurniture(item.id) }}><strong>{item.name}</strong><small>by {item.creator?.display_name ?? 'Unknown'}</small></button>)}</div>
         : <p>Your shared furniture library is empty.</p>}
     </div>}
+    {surfacePickerOpen && <RoomSurfacePicker onClose={() => setSurfacePickerOpen(false)}
+      onApplied={() => { setSurfacePickerOpen(false); refresh() }} />}
     {removing && selected && <div className="bottom-sheet confirmation-sheet" role="dialog" aria-label="Remove placed furniture">
       <strong>Remove {selected.name ?? 'this furniture'}?</strong><p>The saved design stays in your library.</p>
       <div className="sheet-actions"><button className="icon-button" aria-label="Cancel removal" title="Cancel" onClick={() => setRemoving(false)}><X aria-hidden="true" /></button>

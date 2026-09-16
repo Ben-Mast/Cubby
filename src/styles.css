@@ -261,6 +261,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .editor-topbar .editor-name { flex: 1; min-width: 6rem; }
 .editor-topbar .status-pill { padding: 0.42rem 0.6rem; }
 .editor-topbar .icon-button { flex: none; }
+.editor-dimensions, .dimension-fields { display: flex; flex: none; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin-bottom: 0.45rem; }
+.editor-dimensions label, .dimension-fields label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; text-transform: capitalize; }
+.editor-dimensions input, .dimension-fields input { width: 3.7rem; min-height: 40px; padding: 0.25rem; border: 1px solid #b9b1da; border-radius: 0.5rem; font: inherit; }
+.dimension-fields { margin: 0.85rem 0; }
 .immersive-workspace, .room-workspace { position: relative; display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .immersive-page .scene { flex: 1; width: 100%; height: auto; min-height: 0; border-radius: 0.9rem; }
 .immersive-page canvas { cursor: crosshair; }
@@ -277,6 +281,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .palette-grid .color-swatch[aria-pressed="true"] { outline: 3px solid #5b4bdb; outline-offset: 1px; }
 .palette-grid .custom-color { grid-column: span 2; min-height: 48px; }
 .room-workspace { flex: 1; }
+.room-size-button { position: absolute; z-index: 5; top: 0.5rem; right: 0.5rem; background: rgb(255 255 255 / 94%); }
+.surface-editor-page { display: grid; gap: 0.8rem; justify-items: center; }
+.surface-editor-topbar { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.4rem; width: min(100%, 640px); }
+.surface-name { flex: 1; min-width: 9rem; min-height: 44px; padding: 0.55rem; border: 1px solid #b9b1da; border-radius: 0.6rem; }
+.surface-editor-options { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.7rem; }
+.surface-editor-options label { display: flex; align-items: center; gap: 0.3rem; }
+.surface-editor-options input, .surface-editor-options select { width: 4.5rem; min-height: 44px; padding: 0.3rem; border: 1px solid #b9b1da; border-radius: 0.5rem; }
+.surface-editor-options select { width: 6rem; }
+.surface-pixel-canvas { display: block; width: min(100%, 70dvh, 480px); height: auto; border: 1px solid #b9b1da; border-radius: 0.35rem; background: white; image-rendering: pixelated; touch-action: none; }
+.surface-palette { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.4rem; max-width: 640px; }
+.surface-swatch, .surface-palette input[type="color"] { width: 44px; height: 44px; padding: 0; border: 2px solid #b9b1da; border-radius: 0.6rem; }
+.surface-swatch[aria-pressed="true"] { outline: 3px solid #5b4bdb; outline-offset: 1px; }
+.surface-default-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+.surface-default-actions button { min-height: 44px; padding: 0.5rem 0.75rem; border: 1px solid #b9b1da; border-radius: 0.6rem; color: #332b74; background: white; }
+.surface-room-group { margin-top: 0.8rem; }
+.surface-room-tray { margin-top: 0.4rem; }
+.surface-room-tray button[aria-pressed="true"] { border-color: #5b4bdb; background: #e9e5ff; }
 .room-bottom-toolbar .primary-wide { flex: 1; }
 .danger-button { color: #9e263d !important; border-color: #d88a99 !important; }
 .furniture-tray { display: flex; gap: 0.65rem; margin-top: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; }

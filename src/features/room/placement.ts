@@ -1,14 +1,14 @@
 import { coordinateKey, type Coordinate } from '../voxel/model'
-import { ROOM_DEPTH, ROOM_DEPTH_VOXELS, ROOM_HEIGHT_VOXELS, ROOM_WIDTH, ROOM_WIDTH_VOXELS, VOXEL_UNIT } from './config'
+import { DEFAULT_ROOM_DIMENSIONS, VOXEL_UNIT, type RoomDimensions } from './config'
 import type { RoomInstance, RoomModel, RoomRotation } from './model'
 
 export interface PlacementPosition { x: number; y: number; z: number; rotation: RoomRotation }
 export function rotate90(rotation: RoomRotation): RoomRotation {
   return ((rotation + 90) % 360) as RoomRotation
 }
-export function snapFloorPoint(worldX: number, worldZ: number) {
-  return { x: Math.floor((worldX + ROOM_WIDTH / 2) / VOXEL_UNIT),
-    z: Math.floor((worldZ + ROOM_DEPTH / 2) / VOXEL_UNIT) }
+export function snapFloorPoint(worldX: number, worldZ: number, dimensions: RoomDimensions = DEFAULT_ROOM_DIMENSIONS) {
+  return { x: Math.floor(worldX / VOXEL_UNIT + dimensions.width / 2),
+    z: Math.floor(worldZ / VOXEL_UNIT + dimensions.depth / 2) }
 }
 export function placementBounds(model: RoomModel, position: PlacementPosition) {
   const width = model.maxX - model.minX
@@ -32,12 +32,12 @@ function otherVoxels(instances: readonly RoomInstance[], ignoreId?: string) {
   return new Set(instances.filter(item => item.placement.id !== ignoreId)
     .flatMap(item => worldVoxels(item.model, item.placement)).map(coordinateKey))
 }
-function placementError(model: RoomModel, position: PlacementPosition, occupied: ReadonlySet<string>): string | null {
+function placementError(model: RoomModel, position: PlacementPosition, occupied: ReadonlySet<string>, dimensions: RoomDimensions): string | null {
   if (![position.x, position.y, position.z].every(Number.isInteger) || ![0, 90, 180, 270].includes(position.rotation))
     return 'Use integer voxel coordinates and 90° rotations.'
   const bounds = placementBounds(model, position)
-  if (bounds.x < 0 || bounds.z < 0 || bounds.y < 0 || bounds.maxX > ROOM_WIDTH_VOXELS
-    || bounds.maxZ > ROOM_DEPTH_VOXELS || bounds.maxY > ROOM_HEIGHT_VOXELS)
+  if (bounds.x < 0 || bounds.z < 0 || bounds.y < 0 || bounds.maxX > dimensions.width
+    || bounds.maxZ > dimensions.depth || bounds.maxY > dimensions.height)
     return 'Furniture must fit inside the room.'
   const voxels = worldVoxels(model, position)
   if (voxels.some(voxel => occupied.has(coordinateKey(voxel)))) return 'Furniture overlaps another placed item.'
@@ -46,15 +46,22 @@ function placementError(model: RoomModel, position: PlacementPosition, occupied:
   return null
 }
 export function validatePlacement(model: RoomModel, position: PlacementPosition,
-  instances: readonly RoomInstance[], ignoreId?: string): string | null {
-  return placementError(model, position, otherVoxels(instances, ignoreId))
+  instances: readonly RoomInstance[], ignoreId?: string, dimensions: RoomDimensions = DEFAULT_ROOM_DIMENSIONS): string | null {
+  return placementError(model, position, otherVoxels(instances, ignoreId), dimensions)
 }
 export function lowestRestingPosition(model: RoomModel, x: number, z: number, rotation: RoomRotation,
-  instances: readonly RoomInstance[], ignoreId?: string): PlacementPosition | null {
+  instances: readonly RoomInstance[], ignoreId?: string, dimensions: RoomDimensions = DEFAULT_ROOM_DIMENSIONS): PlacementPosition | null {
   const occupied = otherVoxels(instances, ignoreId)
-  for (let y = 0; y <= ROOM_HEIGHT_VOXELS - (model.maxY - model.minY); y++) {
+  for (let y = 0; y <= dimensions.height - (model.maxY - model.minY); y++) {
     const position = { x, y, z, rotation }
-    if (!placementError(model, position, occupied)) return position
+    if (!placementError(model, position, occupied, dimensions)) return position
   }
+  return null
+}
+
+export function validateRoomResize(instances: readonly RoomInstance[], dimensions: RoomDimensions): string | null {
+  if (instances.some(item => worldVoxels(item.model, item.placement).some(voxel =>
+    voxel.x < 0 || voxel.x >= dimensions.width || voxel.y < 0 || voxel.y >= dimensions.height ||
+    voxel.z < 0 || voxel.z >= dimensions.depth))) return 'Existing furniture would be outside the resized room.'
   return null
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Matrix4, Vector3 } from 'three'
+import { BoxGeometry, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Raycaster, Scene, Vector3 } from 'three'
 import { act, create } from 'react-test-renderer'
 import { MemoryRouter } from 'react-router-dom'
 import { App } from '../src/app/App'
@@ -8,8 +8,9 @@ import { AuthProvider } from '../src/features/auth/AuthProvider'
 import { identities } from '../src/features/auth/identities'
 import { fetchSharedRoom } from '../src/features/room/data'
 import { reconstructRoomModel, roomTransform, type PlacedFurniture, type RoomRotation } from '../src/features/room/model'
-import { ROOM_WIDTH, ROOM_DEPTH, VOXEL_UNIT } from '../src/features/room/config'
-import { bindRoomPointerInput } from '../src/features/room/input'
+import { DEFAULT_ROOM_DIMENSIONS, VOXEL_UNIT } from '../src/features/room/config'
+import { bindRoomPointerInput, pickRoomItem } from '../src/features/room/input'
+import { hiddenWallsForCamera, roomWallBoxes, skipWallRaycast, WALL_THICKNESS } from '../src/features/room/walls'
 import { createFurniture, updateFurniture } from '../src/features/furniture/data'
 import { editModel, type VoxelData } from '../src/features/voxel/model'
 import { mock } from './mockSupabase'
@@ -20,6 +21,44 @@ const voxelData: VoxelData = { version: 1, size: [16,16,16], voxels: [
 ] }
 const placement = (rotation: RoomRotation): PlacedFurniture => ({ id: `instance-${rotation}`, home_id: 'shared-home', furniture_id: 'design', x: 12, y: 0, z: 20, rotation })
 function signIn() { mock.session = { user: { id: 'user-one', email: identities[0].email } } }
+
+test('all camera quadrants show the two far walls and switch with center-axis hysteresis', () => {
+  assert.deepEqual(hiddenWallsForCamera(10, 10), { x: 'right', z: 'front' })
+  assert.deepEqual(hiddenWallsForCamera(-10, 10), { x: 'left', z: 'front' })
+  assert.deepEqual(hiddenWallsForCamera(-10, -10), { x: 'left', z: 'back' })
+  assert.deepEqual(hiddenWallsForCamera(10, -10), { x: 'right', z: 'back' })
+  assert.deepEqual(hiddenWallsForCamera(-0.1, 10, { x: 'right', z: 'front' }), { x: 'right', z: 'front' })
+  assert.deepEqual(hiddenWallsForCamera(-0.4, 10, { x: 'right', z: 'front' }), { x: 'left', z: 'front' })
+  assert.deepEqual(hiddenWallsForCamera(10, -0.1, { x: 'right', z: 'front' }), { x: 'right', z: 'front' })
+  assert.deepEqual(hiddenWallsForCamera(10, -0.4, { x: 'right', z: 'front' }), { x: 'right', z: 'back' })
+})
+
+test('four solid wall boxes use configurable width, depth and height', () => {
+  const boxes = roomWallBoxes({ width: 80, depth: 44, height: 20 })
+  assert.deepEqual(boxes.front.size, [20, 5, WALL_THICKNESS])
+  assert.deepEqual(boxes.back.size, boxes.front.size)
+  assert.deepEqual(boxes.left.size, [WALL_THICKNESS, 5, 11])
+  assert.deepEqual(boxes.right.size, boxes.left.size)
+  assert.deepEqual(boxes.front.position, [0, 2.5, 5.5 + WALL_THICKNESS / 2])
+  assert.deepEqual(boxes.back.position, [0, 2.5, -5.5 - WALL_THICKNESS / 2])
+  assert.deepEqual(boxes.left.position, [-10 - WALL_THICKNESS / 2, 2.5, 0])
+  assert.deepEqual(boxes.right.position, [10 + WALL_THICKNESS / 2, 2.5, 0])
+})
+
+test('room walls are excluded from selection rays even while visible or fading', () => {
+  const camera = new PerspectiveCamera(45, 1, 0.1, 100)
+  camera.position.set(0, 3, 8); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+  const scene = new Scene()
+  const wall = new Mesh(new BoxGeometry(4, 4, WALL_THICKNESS), new MeshBasicMaterial())
+  wall.position.set(0, 1, 2); wall.raycast = skipWallRaycast
+  const item = new Mesh(new BoxGeometry(1, 1, 1), new MeshBasicMaterial())
+  item.userData.placementId = 'furniture'
+  item.position.set(0, 0.5, 0)
+  scene.add(wall, item); scene.updateMatrixWorld(true)
+  const ray = new Raycaster(camera.position, new Vector3(0, 0, 0).sub(camera.position).normalize())
+  assert.equal(ray.intersectObject(wall).length, 0)
+  assert.equal(pickRoomItem(100, 100, { left: 0, top: 0, width: 200, height: 200 }, camera, scene), 'furniture')
+})
 
 test('all orthogonal rotations anchor cube bounds at x/z and lowest voxel on floor', () => {
   const model = reconstructRoomModel(voxelData)
@@ -33,8 +72,8 @@ test('all orthogonal rotations anchor cube bounds at x/z and lowest voxel on flo
     for (const voxel of model.voxels) for (const x of [voxel.x, voxel.x + 1])
       for (const y of [voxel.y, voxel.y + 1]) for (const z of [voxel.z, voxel.z + 1]) corners.push(new Vector3(x,y,z).applyMatrix4(matrix))
     const near = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`)
-    near(Math.min(...corners.map(point => point.x)), at.x * VOXEL_UNIT - ROOM_WIDTH / 2)
-    near(Math.min(...corners.map(point => point.z)), at.z * VOXEL_UNIT - ROOM_DEPTH / 2)
+    near(Math.min(...corners.map(point => point.x)), at.x * VOXEL_UNIT - DEFAULT_ROOM_DIMENSIONS.width * VOXEL_UNIT / 2)
+    near(Math.min(...corners.map(point => point.z)), at.z * VOXEL_UNIT - DEFAULT_ROOM_DIMENSIONS.depth * VOXEL_UNIT / 2)
     near(Math.min(...corners.map(point => point.y)), 0)
     near(Math.max(...corners.map(point => point.x)) - Math.min(...corners.map(point => point.x)), (rotation % 180 === 0 ? 4 : 2) * VOXEL_UNIT)
     near(Math.max(...corners.map(point => point.z)) - Math.min(...corners.map(point => point.z)), (rotation % 180 === 0 ? 2 : 4) * VOXEL_UNIT)

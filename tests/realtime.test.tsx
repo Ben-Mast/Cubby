@@ -126,6 +126,19 @@ test('room reacts to placement CRUD and furniture definition edits without dupli
   assert.equal(mock.channels.size,0)
 })
 
+test('room dimensions refetch from the shared home after realtime resize', async () => {
+  mock.reset(); signIn()
+  let latest: ReturnType<typeof useSharedRoom> | null = null
+  let renderer: any
+  await act(async () => { renderer = create(<AuthProvider><RoomControlProbe observe={state => { latest = state }} /></AuthProvider>); await settle() })
+  assert.equal(latest!.data!.home.width, 64)
+  mock.home = { ...mock.home, width: 80, depth: 72, height: 20 }
+  await act(async () => { mock.emitRealtime('homes', 'UPDATE', mock.home); await settle() })
+  assert.deepEqual([latest!.data!.home.width, latest!.data!.home.depth, latest!.data!.home.height], [80, 72, 20])
+  assert.equal(mock.channels.size, 1)
+  await act(async () => renderer.unmount())
+})
+
 test('room placement realtime events reconcile by ID without reloading the room snapshot', async () => {
   mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
   mock.placements = [{ id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, y: 0, z: 3,
