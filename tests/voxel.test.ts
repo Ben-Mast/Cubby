@@ -1,0 +1,151 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, PerspectiveCamera, Vector3 } from 'three'
+import { coordinateKey, deserializeModel, editModel, emptyHistory, historyReducer, HISTORY_LIMIT, inBounds, serializeModel, type VoxelModel } from '../src/features/voxel/model'
+import { EditGesture, faceTarget, floorTarget, pickTarget } from '../src/features/voxel/targeting'
+import { bindEditInput } from '../src/features/voxel/input'
+
+const at = { x: 8, y: 0, z: 8 }
+const brown = '#8b5e3c'
+test('add, delete and paint are immutable and cannot duplicate occupancy', () => {
+  const empty: VoxelModel = new Map()
+  const added = editModel(empty, 'add', at, brown)
+  assert.equal(empty.size, 0)
+  assert.equal(added.size, 1)
+  assert.equal(editModel(added, 'add', at, '#ffffff'), added)
+  assert.equal(editModel(empty, 'paint', at, brown), empty)
+  assert.equal(editModel(empty, 'delete', at, brown), empty)
+  const painted = editModel(added, 'paint', at, '#ffffff')
+  assert.equal(painted.get(coordinateKey(at))?.color, '#ffffff')
+  assert.equal(added.get(coordinateKey(at))?.color, brown)
+  assert.equal(editModel(painted, 'delete', at, brown).size, 0)
+})
+test('all six bounds and fractional/nonfinite coordinates reject edits', () => {
+  for (const axis of ['x', 'y', 'z']) for (const value of [-1, 16, 1.5, NaN, Infinity]) {
+    const bad = { ...at, [axis]: value }
+    assert.equal(inBounds(bad), false)
+    const model = new Map()
+    assert.equal(editModel(model, 'add', bad, brown), model)
+  }
+  assert.ok(inBounds({ x: 15, y: 15, z: 15 }))
+})
+test('deterministic floor and all six face targets, including bounds', () => {
+  assert.deepEqual(floorTarget(-7.9, 7.9), { x: 0, y: 0, z: 15 })
+  assert.equal(floorTarget(8, 0), null)
+  assert.equal(floorTarget(-8.01, 0), null)
+  for (const axis of ['x', 'y', 'z']) for (const direction of [-1, 1]) {
+    const origin = { x: 8, y: 8, z: 8 }
+    const normal = { x: 0, y: 0, z: 0, [axis]: direction }
+    assert.deepEqual(faceTarget(origin, normal, 'add'), { ...origin, [axis]: 8 + direction })
+    assert.deepEqual(faceTarget(origin, normal, 'paint'), origin)
+    assert.deepEqual(faceTarget(origin, normal, 'delete'), origin)
+    assert.equal(faceTarget({ ...origin, [axis]: direction === -1 ? 0 : 15 }, normal, 'add'), null)
+  }
+})
+test('actual Three raycast picks instance faces and floor, not empty air', () => {
+  const camera = new PerspectiveCamera(45, 1, 0.1, 150)
+  camera.position.set(0.5, 10, 0.5)
+  camera.lookAt(0.5, 0, 0.5)
+  camera.updateMatrixWorld()
+  const mesh = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial(), 4096)
+  mesh.count = 1
+  mesh.setMatrixAt(0, new Matrix4().makeTranslation(0.5, 0.5, 0.5))
+  mesh.computeBoundingSphere()
+  mesh.updateMatrixWorld()
+  const rect = { left: 0, top: 0, width: 500, height: 500 } as DOMRect
+  const voxels = [{ ...at, color: brown }]
+  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'add'), { ...at, y: 1 })
+  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'delete'), at)
+  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, voxels, 'paint'), at)
+  mesh.count = 0; mesh.computeBoundingSphere()
+  assert.deepEqual(pickTarget(250, 250, rect, camera, mesh, [], 'add'), at)
+  assert.equal(pickTarget(250, 250, rect, camera, mesh, [], 'paint'), null)
+  camera.position.set(0, 30, 30); camera.lookAt(new Vector3(30, 30, 30)); camera.updateMatrixWorld()
+  assert.equal(pickTarget(250, 250, rect, camera, mesh, [], 'add'), null)
+  mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose()
+})
+test('undo/redo covers add, paint, delete, clear and restore; edits branch history', () => {
+  let state = emptyHistory()
+  const states = [state.present]
+  for (const action of [
+    { type: 'edit', mode: 'add', at, color: brown },
+    { type: 'edit', mode: 'paint', at, color: '#ffffff' },
+    { type: 'edit', mode: 'delete', at, color: brown },
+    { type: 'edit', mode: 'add', at, color: brown },
+    { type: 'clear' },
+    { type: 'restore', model: states[0] },
+  ] as const) { state = historyReducer(state, action); states.push(state.present) }
+  for (let i = states.length - 2; i >= 0; i--) { state = historyReducer(state, { type: 'undo' }); assert.equal(state.present, states[i]) }
+  for (let i = 1; i < states.length; i++) { state = historyReducer(state, { type: 'redo' }); assert.equal(state.present, states[i]) }
+  state = historyReducer(state, { type: 'undo' })
+  state = historyReducer(state, { type: 'edit', mode: 'add', at: { ...at, x: 9 }, color: brown })
+  assert.equal(state.future.length, 0)
+  assert.equal(historyReducer(emptyHistory(), { type: 'clear' }).past.length, 0)
+  let bounded = emptyHistory()
+  for (let i = 0; i < 150; i++) bounded = historyReducer(bounded, { type: 'edit', mode: 'add', at: { x: i % 16, y: Math.floor(i / 16), z: 0 }, color: brown })
+  assert.equal(bounded.past.length, HISTORY_LIMIT)
+})
+test('canonical serialization round trips a recognizable 3D chair and full editor volume', () => {
+  const chair = new Map()
+  for (let x = 4; x < 10; x++) for (let z = 4; z < 10; z++) {
+    const seat = { x, y: 4, z, color: brown }; chair.set(coordinateKey(seat), seat)
+    for (let y = 0; y < 4; y++) if ([4, 9].includes(x) && [4, 9].includes(z)) {
+      const leg = { x, y, z, color: brown }; chair.set(coordinateKey(leg), leg)
+    }
+    if (z === 4) for (let y = 5; y < 10; y++) {
+      const back = { x, y, z, color: brown }; chair.set(coordinateKey(back), back)
+    }
+  }
+  const json = serializeModel(chair)
+  assert.equal(serializeModel(deserializeModel(json)), json)
+  assert.equal(chair.size, 82)
+  const full = new Map()
+  for (let x = 0; x < 16; x++) for (let y = 0; y < 16; y++) for (let z = 0; z < 16; z++) {
+    const voxel = { x, y, z, color: brown }; full.set(coordinateKey(voxel), voxel)
+  }
+  assert.equal(deserializeModel(serializeModel(full)).size, 4096)
+})
+test('deserialization rejects invalid format, colors, out-of-bounds and duplicate voxels', () => {
+  const voxel = { ...at, color: brown }
+  for (const data of [null, {}, { version: 2, size: [16,16,16], voxels: [] },
+    { version: 1, size: [32,16,16], voxels: [] },
+    ...[[voxel, voxel], [{ ...voxel, x: 16 }], [{ ...voxel, y: -1 }], [{ ...voxel, z: 0.5 }],
+      [{ ...voxel, color: 'red' }], [null]].map(voxels => ({ version: 1, size: [16,16,16], voxels }))])
+    assert.throws(() => deserializeModel(JSON.stringify(data)))
+})
+test('mouse and touch-style pointer taps edit, drags and multi-touch never edit', () => {
+  for (const id of [1, 123]) {
+    const gesture = new EditGesture()
+    gesture.down(id, 20, 30, 0)
+    assert.equal(gesture.up(id, 22, 31), true)
+    gesture.down(id, 20, 30, 0); gesture.move(id, 40, 30)
+    assert.equal(gesture.up(id, 20, 30), false)
+    gesture.down(id, 20, 30, 2); assert.equal(gesture.up(id, 20, 30), false)
+    gesture.down(id, 20, 30, 0); gesture.cancel(id); assert.equal(gesture.up(id, 20, 30), false)
+    gesture.down(id, 20, 30, 0); gesture.down(id + 1, 25, 30, 0)
+    assert.equal(gesture.up(id + 1, 25, 30), false)
+    assert.equal(gesture.up(id, 20, 30), false)
+  }
+})
+
+test('actual pointer listeners accept mouse/touch, cancel conflicts and clean up', () => {
+  class TestCanvas extends EventTarget { setPointerCapture(_id: number) {} }
+  for (const pointerType of ['mouse', 'touch']) {
+    const canvas = new TestCanvas()
+    const edits: number[][] = []
+    const unbind = bindEditInput(canvas as unknown as HTMLCanvasElement, (x, y) => edits.push([x, y]))
+    const send = (type: string, pointerId = 1, clientX = 100, clientY = 200) => {
+      const event = Object.assign(new Event(type), { pointerId, clientX, clientY, button: 0, pointerType })
+      canvas.dispatchEvent(event)
+    }
+    send('pointerdown'); send('pointerup')
+    assert.deepEqual(edits, [[100, 200]])
+    send('pointerdown'); send('pointermove', 1, 150); send('pointerup')
+    send('pointerdown'); send('pointercancel'); send('pointerup')
+    send('pointerdown'); send('lostpointercapture'); send('pointerup')
+    send('pointerdown'); send('pointerdown', 2); send('pointerup', 2); send('pointerup')
+    assert.equal(edits.length, 1)
+    unbind(); send('pointerdown'); send('pointerup')
+    assert.equal(edits.length, 1)
+  }
+})

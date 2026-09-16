@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Cubby app icon</title>
+  <rect width="512" height="512" rx="112" fill="#5b4bdb"/>
+  <path d="M112 205 256 122l144 83v166L256 454l-144-83Z" fill="#fff" opacity=".96"/>
+  <path d="m112 205 144 83 144-83M256 288v166" fill="none" stroke="#5b4bdb" stroke-linejoin="round" stroke-width="26"/>
+  <path d="m181 165 144 83" fill="none" stroke="#cabffd" stroke-linecap="round" stroke-width="24"/>
+</svg>
+
