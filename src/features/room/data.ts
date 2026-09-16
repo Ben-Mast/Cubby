@@ -2,7 +2,7 @@ import { supabase } from '../../lib/supabase/client'
 import { fetchCurrentHome, type SharedHome } from '../home/currentHome'
 import { getFurnitureDefinitions, listFurnitureForHome, type FurnitureSummary } from '../furniture/data'
 import { reconstructRoomModel, roomTransform, type PlacedFurniture, type RoomInstance, type RoomModel } from './model'
-import { validatePlacement, type FloorPosition } from './placement'
+import { validatePlacement, type PlacementPosition } from './placement'
 
 export interface SharedRoomData { home: SharedHome; instances: RoomInstance[]; furniture: FurnitureSummary[]; warnings: string[] }
 export async function fetchSharedRoom(): Promise<SharedRoomData> {
@@ -11,7 +11,7 @@ export async function fetchSharedRoom(): Promise<SharedRoomData> {
 }
 export async function fetchSharedRoomForHome(home: SharedHome): Promise<SharedRoomData> {
   const [{ data, error }, furniture] = await Promise.all([
-    supabase.from('placed_furniture').select('id, home_id, furniture_id, x, z, rotation, updated_at').eq('home_id', home.id).order('id'),
+    supabase.from('placed_furniture').select('id, home_id, furniture_id, x, y, z, rotation, updated_at').eq('home_id', home.id).order('id'),
     listFurnitureForHome(home.id),
   ])
   if (error) throw new Error('Unable to load your shared room. Check your connection and retry.')
@@ -35,7 +35,7 @@ export async function fetchSharedRoomForHome(home: SharedHome): Promise<SharedRo
   return { home, instances, furniture, warnings }
 }
 
-async function checkedPlacement(furnitureId: string, position: FloorPosition, placementId?: string) {
+async function checkedPlacement(furnitureId: string, position: PlacementPosition, placementId?: string) {
   const room = await fetchSharedRoom()
   if (room.warnings.length) throw new Error('Refresh or repair unavailable room items before placing furniture.')
   if (placementId && !room.instances.some(item => item.placement.id === placementId && item.placement.furniture_id === furnitureId))
@@ -46,26 +46,28 @@ async function checkedPlacement(furnitureId: string, position: FloorPosition, pl
   if (invalid) throw new Error(invalid)
   return room.home.id
 }
-const placementColumns = 'id, home_id, furniture_id, x, z, rotation, updated_at'
+const placementColumns = 'id, home_id, furniture_id, x, y, z, rotation, updated_at'
 function placementWriteError(error: { code?: string; message?: string } | null, fallback: string): Error {
-  if (error?.code === '23514' && (error.message === 'Furniture must fit inside the room.' || error.message === 'Furniture overlaps another placed item.'))
+  if (error?.code === '23514' && (error.message === 'Furniture must fit inside the room.' || error.message === 'Furniture overlaps another placed item.'
+    || error.message === 'Furniture needs support from the floor or another item.'))
     return new Error(error.message)
   return new Error(fallback)
 }
-export async function createPlacement(furnitureId: string, position: FloorPosition): Promise<PlacedFurniture> {
+export async function createPlacement(furnitureId: string, position: PlacementPosition): Promise<PlacedFurniture> {
   const homeId = await checkedPlacement(furnitureId, position)
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (!user || authError) throw new Error('Sign in before placing furniture.')
   const { data, error } = await supabase.from('placed_furniture')
-    .insert({ home_id: homeId, furniture_id: furnitureId, created_by: user.id, x: position.x, z: position.z, rotation: position.rotation })
+    .insert({ home_id: homeId, furniture_id: furnitureId, created_by: user.id,
+      x: position.x, y: position.y, z: position.z, rotation: position.rotation })
     .select(placementColumns).single<PlacedFurniture>()
   if (error || !data) throw placementWriteError(error, 'Unable to confirm placement. Refresh the room before retrying.')
   return data
 }
-export async function updatePlacement(id: string, furnitureId: string, position: FloorPosition): Promise<PlacedFurniture> {
+export async function updatePlacement(id: string, furnitureId: string, position: PlacementPosition): Promise<PlacedFurniture> {
   const homeId = await checkedPlacement(furnitureId, position, id)
   const { data, error } = await supabase.from('placed_furniture')
-    .update({ x: position.x, z: position.z, rotation: position.rotation })
+    .update({ x: position.x, y: position.y, z: position.z, rotation: position.rotation })
     .eq('home_id', homeId).eq('id', id).select(placementColumns).single<PlacedFurniture>()
   if (error || !data) throw placementWriteError(error, 'Unable to update placement. Refresh the room and retry.')
   return data

@@ -14,7 +14,7 @@ for (let x = 2; x < 14; x++) for (let y = 0; y < 16; y++) for (let z = 2; z < 14
 const data: VoxelData = { version: 1, size: [16,16,16], voxels }
 const model = reconstructRoomModel(data)
 const instances: RoomInstance[] = ([0,90,180,270] as const).map((rotation, index) => ({
-  placement: { id: String(index), home_id: 'test', furniture_id: 'test-design', x: index % 2 ? 9 : 3, z: index < 2 ? 3 : 9, rotation }, model,
+  placement: { id: String(index), home_id: 'test', furniture_id: 'test-design', x: index % 2 ? 36 : 12, y: 0, z: index < 2 ? 12 : 36, rotation }, model,
 }))
 function Harness() {
   const [empty, setEmpty] = useState(true)

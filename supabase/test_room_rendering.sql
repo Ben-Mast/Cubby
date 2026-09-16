@@ -23,19 +23,19 @@ begin
       'f6000000-0000-4000-8000-000000000003', 'f6000000-0000-4000-8000-000000000004')
     and (home_id <> shared_home_id or furniture_id <> design_id or created_by <> auth_user_id)
   ) then raise exception 'Reserved test IDs already belong to different data. Stop and inspect.'; end if;
-  insert into public.placed_furniture(id, home_id, furniture_id, x, z, rotation, created_by)
+  insert into public.placed_furniture(id, home_id, furniture_id, x, y, z, rotation, created_by)
   values
-    ('f6000000-0000-4000-8000-000000000001', shared_home_id, design_id, 3, 3, 0, auth_user_id),
-    ('f6000000-0000-4000-8000-000000000002', shared_home_id, design_id, 9, 3, 90, auth_user_id),
-    ('f6000000-0000-4000-8000-000000000003', shared_home_id, design_id, 3, 9, 180, auth_user_id),
-    ('f6000000-0000-4000-8000-000000000004', shared_home_id, design_id, 9, 9, 270, auth_user_id)
+    ('f6000000-0000-4000-8000-000000000001', shared_home_id, design_id, 12, 0, 12, 0, auth_user_id),
+    ('f6000000-0000-4000-8000-000000000002', shared_home_id, design_id, 36, 0, 12, 90, auth_user_id),
+    ('f6000000-0000-4000-8000-000000000003', shared_home_id, design_id, 12, 0, 36, 180, auth_user_id),
+    ('f6000000-0000-4000-8000-000000000004', shared_home_id, design_id, 36, 0, 36, 270, auth_user_id)
   on conflict (id) do nothing;
 end;
 $$;
-select id, home_id, furniture_id, x, z, rotation from public.placed_furniture
+select id, home_id, furniture_id, x, y, z, rotation from public.placed_furniture
 where id in ('f6000000-0000-4000-8000-000000000001', 'f6000000-0000-4000-8000-000000000002',
   'f6000000-0000-4000-8000-000000000003', 'f6000000-0000-4000-8000-000000000004') order by id;
-commit;
+rollback;
 
 -- Later cleanup (only these four reserved IDs; leaves the furniture design intact):
 delete from public.placed_furniture where id in (

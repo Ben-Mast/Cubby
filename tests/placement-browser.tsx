@@ -21,7 +21,7 @@ let nextId = 2
 function Harness() {
   const [picked, setPicked] = useState<FurnitureRecord | null>(null)
   const [instances, setInstances] = useState<RoomInstance[]>([{ name: design.name,model,
-    placement: { id: '1',home_id: 'test',furniture_id: 'chair',x: 3,z: 3,rotation: 0 } }])
+    placement: { id: '1',home_id: 'test',furniture_id: 'chair',x: 12,y: 0,z: 12,rotation: 0 } }])
   const [saved, setSaved] = useState('No fixture mutation yet')
   const actions = {
     async create(_id: string, position: FloorPosition): Promise<PlacedFurniture> {

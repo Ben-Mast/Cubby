@@ -53,25 +53,6 @@ test('migration/setup execute and enforce API grants, RLS, constraints, and casc
     await db.exec(verification)
     assert.equal((await db.query('select * from public.furniture')).rows.length, 0, 'manual verification rolls back probes')
 
-    await t.test('optional Phase 6 test SQL previews, applies idempotently and cleans up four copies', async () => {
-      const id = '66666666-6666-4666-8666-666666666666'
-      await db.query('insert into public.furniture(id,home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4,$5)',
-        [id, homeId, userOne, 'Room test', JSON.stringify({ version: 1, size: [16,16,16], voxels: [{ x: 4,y: 6,z: 4,color: '#8b5e3c' }] })])
-      // Developer may have configured/applied this optional script already.
-      // Normalize only the isolated test copy; preserve their workspace SQL.
-      const seed = readFileSync('supabase/test_room_rendering.sql', 'utf8').split('-- Later cleanup')[0]
-        .replace(/design_id uuid := '[^']+'/, `design_id uuid := '${id}'`)
-        .replace(/\ncommit;/, '\nrollback;')
-      await db.exec(seed)
-      assert.equal((await db.query('select * from public.placed_furniture')).rows.length, 0, 'preview rolls back')
-      const apply = seed.replace('\nrollback;', '\ncommit;')
-      await db.exec(apply); await db.exec(apply)
-      const rows = (await db.query('select x,z,rotation from public.placed_furniture order by id')).rows
-      assert.deepEqual(rows, [{ x: 3,z: 3,rotation: 0 },{ x: 9,z: 3,rotation: 90 },{ x: 3,z: 9,rotation: 180 },{ x: 9,z: 9,rotation: 270 }])
-      await db.query('delete from public.furniture where id=$1', [id])
-      assert.equal((await db.query('select * from public.placed_furniture')).rows.length, 0)
-    })
-
     async function asRole(role, uid, action) {
       await db.exec(`set role ${role}`)
       await db.query("select set_config('request.jwt.claim.sub', $1, false)", [uid ?? ''])
@@ -215,6 +196,76 @@ test('migration/setup execute and enforce API grants, RLS, constraints, and casc
         assert.equal((await db.query('update public.placed_furniture set x=0 where id=$1 returning id', [placed])).rows.length, 0)
       })
       await db.query('delete from public.furniture where id=$1', [id])
+    })
+
+    await t.test('voxel-grid migration preserves legacy positions and enforces 3D occupancy/support', async () => {
+      const single = { version: 1, size: [16,16,16], voxels: [{ x: 4,y: 6,z: 4,color: '#ffffff' }] }
+      const legacy = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4) returning id',
+        [homeId,userOne,'Legacy',JSON.stringify(single)])).rows[0].id
+      const legacyPlacement = (await db.query('insert into public.placed_furniture(home_id,furniture_id,x,z,rotation,created_by) values ($1,$2,3,4,0,$3) returning id',
+        [homeId,legacy,userOne])).rows[0].id
+      await db.exec(readFileSync('supabase/migrations/202609160002_voxel_room_placement.sql', 'utf8'))
+      assert.deepEqual((await db.query('select x,y,z from public.placed_furniture where id=$1', [legacyPlacement])).rows[0],
+        { x: 12,y: 0,z: 16 })
+      assert.equal((await db.query("select has_column_privilege('authenticated','public.placed_furniture','y','INSERT') as allowed")).rows[0].allowed, true)
+      await db.query('delete from public.furniture where id=$1', [legacy])
+
+      const table = { version: 1,size: [16,16,16],voxels: [
+        { x: 0,y: 0,z: 0,color: '#ffffff' },{ x: 1,y: 0,z: 0,color: '#ffffff' },
+        { x: 0,y: 1,z: 0,color: '#ffffff' },{ x: 1,y: 1,z: 0,color: '#ffffff' },
+      ] }
+      const item = { version: 1,size: [16,16,16],voxels: [
+        { x: 0,y: 0,z: 0,color: '#ffffff' },{ x: 0,y: 1,z: 0,color: '#ffffff' },
+      ] }
+      const tableId = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4) returning id',
+        [homeId,userOne,'Table',JSON.stringify(table)])).rows[0].id
+      const itemId = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4) returning id',
+        [homeId,userOne,'Item',JSON.stringify(item)])).rows[0].id
+      const hollow = { version: 1,size: [16,16,16],voxels: [
+        { x: 0,y: 0,z: 0,color: '#ffffff' },{ x: 2,y: 0,z: 0,color: '#ffffff' },
+      ] }
+      const hollowId = (await db.query('insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4) returning id',
+        [homeId,userOne,'Hollow',JSON.stringify(hollow)])).rows[0].id
+      await asRole('authenticated', userOne, async () => {
+        await db.query('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,20,0,20,0,$3)',
+          [homeId,tableId,userOne])
+        await denied('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,20,1,20,0,$3)',
+          [homeId,itemId,userOne], '23514')
+        await denied('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,20,4,20,0,$3)',
+          [homeId,itemId,userOne], '23514')
+        const stacked = (await db.query('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,20,2,20,0,$3) returning id',
+          [homeId,itemId,userOne])).rows[0].id
+        await denied('update public.placed_furniture set y=1 where id=$1', [stacked], '23514')
+        await db.query('update public.placed_furniture set x=24,y=0 where id=$1', [stacked])
+        await denied('update public.placed_furniture set y=2 where id=$1', [stacked], '23514')
+        await denied('update public.placed_furniture set x=64 where id=$1', [stacked], '23514')
+        await db.query('update public.placed_furniture set rotation=90 where id=$1', [stacked])
+        await db.query('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,30,0,30,0,$3)',
+          [homeId,hollowId,userOne])
+        await db.query('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,31,0,30,0,$3)',
+          [homeId,itemId,userOne])
+        await denied('insert into public.placed_furniture(home_id,furniture_id,x,y,z,rotation,created_by) values ($1,$2,32,0,30,0,$3)',
+          [homeId,itemId,userOne], '23514')
+      })
+      await db.query('delete from public.furniture where id in ($1,$2,$3)', [tableId,itemId,hollowId])
+    })
+
+    await t.test('optional room test SQL previews and places four voxel-grid copies', async () => {
+      const id = '66666666-6666-4666-8666-666666666666'
+      await db.query('insert into public.furniture(id,home_id,creator_id,name,voxel_data) values ($1,$2,$3,$4,$5)',
+        [id, homeId, userOne, 'Room test', JSON.stringify({ version: 1, size: [16,16,16], voxels: [{ x: 4,y: 6,z: 4,color: '#8b5e3c' }] })])
+      const seed = readFileSync('supabase/test_room_rendering.sql', 'utf8').split('-- Later cleanup')[0]
+        .replace(/design_id uuid := '[^']+'/, `design_id uuid := '${id}'`)
+        .replace(/\ncommit;/, '\nrollback;')
+      await db.exec(seed)
+      assert.equal((await db.query('select * from public.placed_furniture')).rows.length, 0, 'preview rolls back')
+      const apply = seed.replace('\nrollback;', '\ncommit;')
+      await db.exec(apply); await db.exec(apply)
+      const rows = (await db.query('select x,y,z,rotation from public.placed_furniture order by id')).rows
+      assert.deepEqual(rows, [{ x: 12,y: 0,z: 12,rotation: 0 },{ x: 36,y: 0,z: 12,rotation: 90 },
+        { x: 12,y: 0,z: 36,rotation: 180 },{ x: 36,y: 0,z: 36,rotation: 270 }])
+      await db.query('delete from public.furniture where id=$1', [id])
+      assert.equal((await db.query('select * from public.placed_furniture')).rows.length, 0)
     })
 
     await t.test('Phase 8 migration publishes only shared furniture tables and is repeatable', async () => {

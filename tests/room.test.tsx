@@ -18,7 +18,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const voxelData: VoxelData = { version: 1, size: [16,16,16], voxels: [
   { x: 4, y: 6, z: 9, color: '#8b5e3c' }, { x: 7, y: 8, z: 10, color: '#ffffff' },
 ] }
-const placement = (rotation: RoomRotation): PlacedFurniture => ({ id: `instance-${rotation}`, home_id: 'shared-home', furniture_id: 'design', x: 3, z: 5, rotation })
+const placement = (rotation: RoomRotation): PlacedFurniture => ({ id: `instance-${rotation}`, home_id: 'shared-home', furniture_id: 'design', x: 12, y: 0, z: 20, rotation })
 function signIn() { mock.session = { user: { id: 'user-one', email: identities[0].email } } }
 
 test('all orthogonal rotations anchor cube bounds at x/z and lowest voxel on floor', () => {
@@ -33,12 +33,14 @@ test('all orthogonal rotations anchor cube bounds at x/z and lowest voxel on flo
     for (const voxel of model.voxels) for (const x of [voxel.x, voxel.x + 1])
       for (const y of [voxel.y, voxel.y + 1]) for (const z of [voxel.z, voxel.z + 1]) corners.push(new Vector3(x,y,z).applyMatrix4(matrix))
     const near = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`)
-    near(Math.min(...corners.map(point => point.x)), at.x - ROOM_WIDTH / 2)
-    near(Math.min(...corners.map(point => point.z)), at.z - ROOM_DEPTH / 2)
+    near(Math.min(...corners.map(point => point.x)), at.x * VOXEL_UNIT - ROOM_WIDTH / 2)
+    near(Math.min(...corners.map(point => point.z)), at.z * VOXEL_UNIT - ROOM_DEPTH / 2)
     near(Math.min(...corners.map(point => point.y)), 0)
     near(Math.max(...corners.map(point => point.x)) - Math.min(...corners.map(point => point.x)), (rotation % 180 === 0 ? 4 : 2) * VOXEL_UNIT)
     near(Math.max(...corners.map(point => point.z)) - Math.min(...corners.map(point => point.z)), (rotation % 180 === 0 ? 2 : 4) * VOXEL_UNIT)
   }
+  const raised = roomTransform({ ...placement(90), y: 2 }, model)
+  assert.ok(Math.abs(raised.position[1] + model.minY * VOXEL_UNIT - 2 * VOXEL_UNIT) < 1e-9)
   assert.throws(() => reconstructRoomModel({ version: 1, size: [16,16,16], voxels: [] }))
   assert.throws(() => roomTransform({ ...placement(0), rotation: 45 as RoomRotation }, model))
 })

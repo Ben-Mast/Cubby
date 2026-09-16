@@ -8,7 +8,8 @@ import { reconstructRoomModel, roomTransform, type PlacedFurniture, type RoomIns
 
 function isPlacement(value: Record<string, unknown>): value is Record<string, unknown> & PlacedFurniture {
   return typeof value.id === 'string' && typeof value.home_id === 'string' && typeof value.furniture_id === 'string'
-    && Number.isInteger(value.x) && Number.isInteger(value.z) && [0, 90, 180, 270].includes(value.rotation as number)
+    && Number.isInteger(value.x) && Number.isInteger(value.y) && Number.isInteger(value.z)
+    && [0, 90, 180, 270].includes(value.rotation as number)
 }
 
 function upsertRoomInstance(items: readonly RoomInstance[], incoming: RoomInstance): RoomInstance[] {

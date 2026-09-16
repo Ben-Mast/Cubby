@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { useState } from 'react'
 import { act, create } from 'react-test-renderer'
 import { MemoryRouter } from 'react-router-dom'
-import { placementBounds, rotate90, snapFloorPoint, validatePlacement } from '../src/features/room/placement'
+import { lowestRestingPosition, placementBounds, rotate90, snapFloorPoint, validatePlacement, worldVoxels } from '../src/features/room/placement'
 import { reconstructRoomModel, type RoomInstance } from '../src/features/room/model'
 import { createPlacement, fetchSharedRoom, removePlacement, updatePlacement } from '../src/features/room/data'
 import { RoomWorkspace } from '../src/routes/RoomPage'
@@ -20,15 +20,17 @@ const design = { id: 'design', home_id: 'shared-home', creator_id: 'user-one', n
   voxel_data: { version: 1 as const, size: [16,16,16] as [number,number,number], voxels: [
     { x: 4, y: 6, z: 9, color: '#8b5e3c' }, { x: 15, y: 8, z: 12, color: '#ffffff' },
   ] } }
-const model = reconstructRoomModel(design.voxel_data) // 3 x 1 world-unit occupied bounds
-const position = { x: 2, z: 4, rotation: 0 as const }
+const model = reconstructRoomModel(design.voxel_data) // 12 x 3 x 4 occupied voxels
+const position = { x: 8, y: 0, z: 16, rotation: 0 as const }
 const instance: RoomInstance = { name: 'Bench', model, placement: { id: 'placed', home_id: 'shared-home', furniture_id: 'design', ...position } }
 function setup() { mock.reset(); mock.session = { user: { id: 'user-one' } }; mock.furniture.set('design', design) }
 
 test('floor points snap deterministically to integer cells without hiding outside positions', () => {
-  assert.deepEqual(snapFloorPoint(-7.01, 7.99), { x: 0, z: 15 })
-  assert.deepEqual(snapFloorPoint(-8.01, 8), { x: -1, z: 16 })
-  assert.deepEqual(snapFloorPoint(0,0), { x: 8,z: 8 })
+  assert.deepEqual(snapFloorPoint(-7.01, 7.99), { x: 3, z: 63 })
+  assert.deepEqual(snapFloorPoint(-8.01, 8), { x: -1, z: 64 })
+  assert.deepEqual(snapFloorPoint(0,0), { x: 32,z: 32 })
+  assert.deepEqual(snapFloorPoint(0.24, 0), { x: 32,z: 32 })
+  assert.deepEqual(snapFloorPoint(0.25, 0), { x: 33,z: 32 })
   let rotation = position.rotation as 0 | 90 | 180 | 270
   for (const expected of [90,180,270,0]) { rotation = rotate90(rotation); assert.equal(rotation, expected) }
 })
@@ -38,7 +40,7 @@ test('actual room rays target floor independent of furniture height and resolve 
   const rect = { left: 10,top: 20,width: 500,height: 500 }
   const screen = (world: Vector3) => { const point = world.project(camera); return [10+(point.x+1)*250,20+(1-point.y)*250] as const }
   const [x,y] = screen(new Vector3(-3.8,0,2.4))
-  assert.deepEqual(pickRoomPosition(x,y,rect,camera), { x: 4,z: 10 })
+  assert.deepEqual(pickRoomPosition(x,y,rect,camera), { x: 16,z: 41 })
   const scene = new Scene(), group = new Group()
   group.userData.placementId = 'selected'
   group.add(new Mesh(new BoxGeometry(2,2,2),new MeshBasicMaterial()))
@@ -48,36 +50,61 @@ test('actual room rays target floor independent of furniture height and resolve 
   assert.equal(pickRoomItem(10,20,rect,camera,scene),null)
 })
 test('bounds derive from occupied voxels, swap after rotation, and allow exact room edges', () => {
-  assert.deepEqual(placementBounds(model, position), { x: 2,z: 4,maxX: 5,maxZ: 5 })
+  assert.deepEqual(placementBounds(model, position), { x: 8,y: 0,z: 16,maxX: 20,maxY: 3,maxZ: 20 })
   for (const rotation of [0,90,180,270] as const) {
     const sideways = rotation % 180 !== 0
-    assert.equal(validatePlacement(model, { x: sideways ? 15 : 13, z: sideways ? 13 : 15, rotation }, []), null)
-    assert.match(validatePlacement(model, { x: 15,z: 15,rotation }, [])!, /inside/)
+    assert.equal(validatePlacement(model, { x: sideways ? 60 : 52, y: 0, z: sideways ? 52 : 60, rotation }, []), null)
+    assert.match(validatePlacement(model, { x: 63,y: 0,z: 63,rotation }, [])!, /inside/)
   }
   assert.match(validatePlacement(model, { ...position,x: -1 }, [])!, /inside/)
+  assert.match(validatePlacement(model, { ...position,y: -1 }, [])!, /inside/)
+  assert.match(validatePlacement(model, { ...position,y: 14 }, [])!, /inside/)
   assert.match(validatePlacement(model, { ...position,x: 1.5 }, [])!, /integer/)
   assert.match(validatePlacement(model, { ...position,rotation: 45 as any }, [])!, /90/)
 })
-test('AABB collision rejects intersections after rotation, permits edge contact, and ignores moving self', () => {
+test('voxel collision permits hollow footprints, rejects occupied cells, and ignores moving self', () => {
   assert.match(validatePlacement(model, position, [instance])!, /overlaps/)
   assert.equal(validatePlacement(model, position, [instance], 'placed'), null)
-  assert.equal(validatePlacement(model, { ...position,x: 5 }, [instance]), null)
-  assert.equal(validatePlacement(model, { ...position,x: 1,z: 5 }, [instance]), null)
-  assert.equal(validatePlacement(model, { x: 2,z: 3,rotation: 0 }, [instance]), null)
-  assert.match(validatePlacement(model, { x: 2,z: 3,rotation: 90 }, [instance])!, /overlaps/)
-  const rotated = { ...instance, placement: { ...instance.placement,rotation: 90 as const } }
-  assert.match(validatePlacement(model, { x: 2,z: 6,rotation: 0 }, [rotated])!, /overlaps/)
+  assert.equal(validatePlacement(model, { ...position,x: 9 }, [instance]), null, 'bounding boxes intersect but voxels do not')
+  assert.deepEqual(worldVoxels(model, { ...position,rotation: 90 }), [
+    { x: 8,y: 0,z: 27 }, { x: 11,y: 2,z: 16 },
+  ])
+  const cube = reconstructRoomModel({ version: 1,size: [16,16,16],voxels: [{ x: 0,y: 0,z: 0,color: '#ffffff' }] })
+  const first = { ...instance, model: cube }
+  assert.match(validatePlacement(cube, position, [first])!, /overlaps/)
+  assert.equal(validatePlacement(cube, { ...position,x: 9 }, [first]), null)
+})
+test('lowest supported y rises onto a table, drops off it, and rotation recalculates occupancy', () => {
+  const table = reconstructRoomModel({ version: 1,size: [16,16,16],voxels: [
+    { x: 0,y: 0,z: 0,color: '#ffffff' }, { x: 1,y: 0,z: 0,color: '#ffffff' },
+    { x: 0,y: 1,z: 0,color: '#ffffff' }, { x: 1,y: 1,z: 0,color: '#ffffff' },
+  ] })
+  const item = reconstructRoomModel({ version: 1,size: [16,16,16],voxels: [
+    { x: 0,y: 0,z: 0,color: '#ffffff' }, { x: 0,y: 1,z: 0,color: '#ffffff' },
+  ] })
+  const tableInstance: RoomInstance = { model: table, placement: { ...instance.placement,id: 'table',x: 20,y: 0,z: 20 } }
+  const stacked = lowestRestingPosition(item, 20, 20, 0, [tableInstance])!
+  assert.deepEqual(stacked, { x: 20,y: 2,z: 20,rotation: 0 })
+  assert.equal(validatePlacement(item, stacked, [tableInstance]), null)
+  assert.match(validatePlacement(item, { ...stacked,y: 1 }, [tableInstance])!, /overlaps/)
+  assert.match(validatePlacement(item, { ...stacked,y: 4 }, [tableInstance])!, /support/)
+  assert.deepEqual(lowestRestingPosition(item, 22, 20, 0, [tableInstance]), { x: 22,y: 0,z: 20,rotation: 0 })
+  const second: RoomInstance = { model: item, placement: { ...tableInstance.placement,id: 'stacked',furniture_id: 'item',...stacked } }
+  assert.equal(lowestRestingPosition(item, 20, 20, 0, [tableInstance, second])?.y, 4)
+  assert.equal(lowestRestingPosition(item, 20, 20, 0, [tableInstance, second], 'stacked')?.y, 2)
+  const rotated = lowestRestingPosition(table, 20, 20, 90, [second])
+  assert.equal(rotated?.y, 0, 'rotation changes the voxel footprint before choosing height')
 })
 test('create/reload/move/rotate/remove use shared home, preserve instance identity and definition', async () => {
   setup()
   const row = await createPlacement('design', position)
   assert.equal(mock.placements[0].created_by, 'user-one')
   assert.equal((await fetchSharedRoom()).instances[0].placement.id, row.id)
-  await updatePlacement(row.id, 'design', { x: 8,z: 8,rotation: 90 })
-  assert.deepEqual((await fetchSharedRoom()).instances[0].placement, { ...row,x: 8,z: 8,rotation: 90 })
+  await updatePlacement(row.id, 'design', { x: 24,y: 0,z: 24,rotation: 90 })
+  assert.deepEqual((await fetchSharedRoom()).instances[0].placement, { ...row,x: 24,y: 0,z: 24,rotation: 90 })
   mock.session = { user: { id: 'user-two' } }
   assert.equal((await fetchSharedRoom()).instances[0].placement.id, row.id)
-  await updatePlacement(row.id, 'design', { x: 8,z: 8,rotation: 180 })
+  await updatePlacement(row.id, 'design', { x: 24,y: 0,z: 24,rotation: 180 })
   assert.equal(mock.placements[0].created_by, 'user-one')
   await removePlacement(row.id)
   assert.equal((await fetchSharedRoom()).instances.length, 0)
@@ -86,14 +113,14 @@ test('create/reload/move/rotate/remove use shared home, preserve instance identi
 })
 test('writes revalidate latest room/geometry, reject invalid or unavailable data, and require authentication', async () => {
   setup()
-  await assert.rejects(createPlacement('design', { ...position,x: 15 }), /inside/)
+  await assert.rejects(createPlacement('design', { ...position,x: 63 }), /inside/)
   await createPlacement('design', position)
   await assert.rejects(createPlacement('design', position), /overlaps/)
   assert.equal(mock.placements.length, 1)
   await assert.rejects(updatePlacement('missing', 'design', position), /no longer exists/)
   await assert.rejects(createPlacement('foreign-design', position), /not accessible/)
   mock.furniture.set('design', { ...design,voxel_data: {} })
-  await assert.rejects(createPlacement('design', { ...position,x: 8 }), /repair/)
+  await assert.rejects(createPlacement('design', { ...position,x: 30 }), /repair/)
   mock.session = null
   await assert.rejects(createPlacement('design', position), /Sign in/)
   await assert.rejects(removePlacement('placed'), /Sign in/)
@@ -115,19 +142,19 @@ test('workspace placement, invalid feedback, cancellation, camera isolation, mov
   const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
   const scene = () => renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
   await render()
-  await act(async () => { scene().onDragStart(null, { x: 15,z: 15 }); scene().onDragEnd({ x: 15,z: 15 }) })
+  await act(async () => { scene().onDragStart(null, { x: 63,z: 63 }); scene().onDragEnd({ x: 63,z: 63 }) })
   assert.equal(button('Confirm placement').props.disabled, true)
   assert.match(JSON.stringify(renderer.toJSON()), /inside the room/)
-  await act(async () => { scene().onDragStart(null, { x: 5,z: 7 }); scene().onDragEnd({ x: 5,z: 7 }) })
+  await act(async () => { scene().onDragStart(null, { x: 20,z: 28 }); scene().onDragEnd({ x: 20,z: 28 }) })
   await act(async () => button('Rotate preview 90 degrees').props.onClick())
   assert.equal(scene().preview.placement.rotation, 90)
   await act(async () => button('Confirm placement').props.onClick())
-  assert.deepEqual(calls[0], ['create','design',{ x: 5,z: 7,rotation: 90 }])
+  assert.deepEqual(calls[0], ['create','design',{ x: 20,y: 0,z: 28,rotation: 90 }])
   room = { ...room,instances: [instance] }; await render()
   await act(async () => scene().onSelect('placed'))
   assert.equal(scene().selectedId, 'placed')
-  await act(async () => { scene().onDragStart('placed', { x: 2,z: 4 }); scene().onDrag({ x: 8,z: 8 }); scene().onDragEnd({ x: 8,z: 8 }) })
-  assert.deepEqual(calls[1], ['update','placed','design',{ x: 8,z: 8,rotation: 0 }])
+  await act(async () => { scene().onDragStart('placed', { x: 8,z: 16 }); scene().onDrag({ x: 24,z: 24 }); scene().onDragEnd({ x: 24,z: 24 }) })
+  assert.deepEqual(calls[1], ['update','placed','design',{ x: 24,y: 0,z: 24,rotation: 0 }])
   await act(async () => button('Rotate selected furniture 90 degrees').props.onClick())
   assert.equal(calls[2][3].rotation, 90)
   await act(async () => button('Remove selected furniture').props.onClick())
@@ -137,6 +164,35 @@ test('workspace placement, invalid feedback, cancellation, camera isolation, mov
   await act(async () => button('Remove selected furniture').props.onClick())
   await act(async () => button('Confirm removal').props.onClick())
   assert.deepEqual(calls[3], ['remove','placed'])
+  await act(async () => renderer.unmount())
+})
+test('drag preview rises onto support, drops back to floor, and writes only at release', async () => {
+  const tableModel = reconstructRoomModel({ version: 1,size: [16,16,16],voxels: [
+    { x: 0,y: 0,z: 0,color: '#ffffff' }, { x: 0,y: 1,z: 0,color: '#ffffff' },
+  ] })
+  const itemModel = reconstructRoomModel({ version: 1,size: [16,16,16],voxels: [
+    { x: 0,y: 0,z: 0,color: '#ffffff' }, { x: 0,y: 1,z: 0,color: '#ffffff' },
+  ] })
+  const table: RoomInstance = { model: tableModel, placement: { ...instance.placement,id: 'table',x: 20,y: 0,z: 20 } }
+  const item: RoomInstance = { model: itemModel, placement: { ...instance.placement,id: 'item',x: 24,y: 0,z: 20 } }
+  const calls: any[] = []
+  let renderer: any
+  await act(async () => { renderer = create(<MemoryRouter><RoomWorkspace
+    room={{ home: { id: 'shared-home',name: 'Home',created_at: '' },instances: [table,item],furniture: [],warnings: [] }}
+    design={null} refresh={() => {}} clearDesign={() => {}} chooseFurniture={() => {}}
+    actions={{ create: createPlacement,remove: removePlacement,
+      update: async (...args: any[]) => { calls.push(args); return { ...item.placement,...args[2] } } } as any} /></MemoryRouter>) })
+  const scene = () => renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
+  await act(async () => scene().onSelect('item'))
+  await act(async () => { scene().onDragStart('item', { x: 24,z: 20 }); scene().onDrag({ x: 20,z: 20 }) })
+  assert.equal(scene().instances.find((entry: RoomInstance) => entry.placement.id === 'item').placement.y, 2)
+  assert.equal(calls.length, 0)
+  await act(async () => scene().onDrag({ x: 24,z: 20 }))
+  assert.equal(scene().instances.find((entry: RoomInstance) => entry.placement.id === 'item').placement.y, 0)
+  await act(async () => scene().onDrag({ x: 20,z: 20 }))
+  await act(async () => scene().onDragEnd({ x: 20,z: 20 }))
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0][2], { x: 20,y: 2,z: 20,rotation: 0 })
   await act(async () => renderer.unmount())
 })
 test('slow placement saves keep preview or same-ID furniture visible without a scene remount or refetch', async () => {

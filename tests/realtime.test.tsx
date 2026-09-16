@@ -97,7 +97,7 @@ test('furniture INSERT/UPDATE/DELETE and local echoes reconcile live without dup
 
 test('room reacts to placement CRUD and furniture definition edits without duplicates', async () => {
   mock.reset(); signIn(); mock.furniture.set('design',furniture('design','Chair'))
-  const placed = { id: 'placed',home_id: 'shared-home',furniture_id: 'design',x: 2,z: 3,rotation: 0 }
+  const placed = { id: 'placed',home_id: 'shared-home',furniture_id: 'design',x: 2,y: 0,z: 3,rotation: 0 }
   mock.placements = [placed]
   let renderer: any
   await act(async () => { renderer = create(<AuthProvider><RoomProbe /></AuthProvider>); await settle() })
@@ -128,7 +128,7 @@ test('room reacts to placement CRUD and furniture definition edits without dupli
 
 test('room placement realtime events reconcile by ID without reloading the room snapshot', async () => {
   mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
-  mock.placements = [{ id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+  mock.placements = [{ id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, y: 0, z: 3,
     rotation: 0, updated_at: '2026-01-01T00:00:00Z' }]
   let renderer: any
   await act(async () => { renderer = create(<AuthProvider><RoomProbe /></AuthProvider>); await settle() })
@@ -157,7 +157,7 @@ test('room placement realtime events reconcile by ID without reloading the room 
 
 test('manual background refresh retains room state and ignores a snapshot made stale by a local save', async () => {
   mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
-  const old = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+  const old = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, y: 0, z: 3,
     rotation: 0 as const, updated_at: '2026-01-01T00:00:00Z' }
   mock.placements = [old]
   let latest: ReturnType<typeof useSharedRoom> | null = null
@@ -186,7 +186,7 @@ test('manual background refresh retains room state and ignores a snapshot made s
 
 test('two mounted room clients converge through realtime after a local update and removal', async () => {
   mock.reset(); signIn(); mock.furniture.set('design', furniture('design', 'Chair'))
-  const placed = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, z: 3,
+  const placed = { id: 'placed', home_id: 'shared-home', furniture_id: 'design', x: 2, y: 0, z: 3,
     rotation: 0 as const, updated_at: '2026-01-01T00:00:00Z' }
   mock.placements = [placed]
   let first: ReturnType<typeof useSharedRoom> | null = null
@@ -197,13 +197,14 @@ test('two mounted room clients converge through realtime after a local update an
     <RoomControlProbe observe={state => { second = state }} />
   </AuthProvider>); await settle() })
   assert.equal(mock.channels.size, 2)
-  const moved = { ...placed, x: 8, updated_at: '2026-01-02T00:00:00Z' }
+  const moved = { ...placed, x: 8, y: 2, updated_at: '2026-01-02T00:00:00Z' }
   mock.placements = [moved]
   await act(async () => first!.upsertPlacement({ ...first!.data!.instances[0], placement: moved }))
   assert.equal(first!.data!.instances[0].placement.x, 8)
   assert.equal(second!.data!.instances[0].placement.x, 2)
   await act(async () => { mock.emitRealtime('placed_furniture', 'UPDATE', moved); await settle() })
   assert.equal(second!.data!.instances[0].placement.x, 8)
+  assert.equal(second!.data!.instances[0].placement.y, 2)
   assert.equal(first!.data!.instances.length, 1)
   mock.placements = []
   await act(async () => first!.removePlacement('placed'))

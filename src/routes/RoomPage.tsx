@@ -7,11 +7,11 @@ import { SharedRoomScene } from '../features/room/SharedRoomScene'
 import { useSharedRoom } from '../features/room/useSharedRoom'
 import { createPlacement, updatePlacement, removePlacement, type SharedRoomData } from '../features/room/data'
 import { reconstructRoomModel, type PlacedFurniture, type RoomInstance, type RoomModel } from '../features/room/model'
-import { rotate90, validatePlacement, type FloorPosition } from '../features/room/placement'
+import { lowestRestingPosition, rotate90, validatePlacement, type PlacementPosition } from '../features/room/placement'
 import { useHeaderAction } from '../app/AppShell'
 
 const placementActions = { create: createPlacement, update: updatePlacement, remove: removePlacement }
-interface Draft { furnitureId: string; name: string; model: RoomModel; position: FloorPosition; movingId?: string }
+interface Draft { furnitureId: string; name: string; model: RoomModel; position: PlacementPosition; movingId?: string }
 
 export function RoomPage() {
   const { identity } = useAuth()
@@ -74,7 +74,7 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   useEffect(() => { active.current = true; return () => { active.current = false } }, [])
   useEffect(() => {
     const next = design ? { furnitureId: design.id, name: design.name, model: reconstructRoomModel(design.voxel_data),
-      position: { x: 0, z: 0, rotation: 0 as const } } : null
+      position: { x: 0, y: 0, z: 0, rotation: 0 as const } } : null
     draftRef.current = next; setDraft(next)
     setSelectedId(''); setRemoving(false); setPickerOpen(false); setError('')
   }, [design])
@@ -84,6 +84,9 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   const invalid = draft ? validatePlacement(draft.model, draft.position, instances, draft.movingId) : null
   const unavailable = Boolean(room?.warnings.length)
   function updateDraft(next: Draft | null) { draftRef.current = next; setDraft(next) }
+  function resting(draft: Draft, x: number, z: number, rotation = draft.position.rotation): PlacementPosition {
+    return lowestRestingPosition(draft.model, x, z, rotation, instances, draft.movingId) ?? { x, y: 0, z, rotation }
+  }
   function cancelPlacement() { updateDraft(null); setError(''); clearDesign() }
   function select(id: string) { if (blocked || draft) return; setSelectedId(id); setRemoving(false); setError('') }
   async function mutate<T>(operation: () => Promise<T>, finish: (result: T) => void, fail?: () => void) {
@@ -105,11 +108,13 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   }
   function rotateDraft() {
     if (!draft) return
-    updateDraft({ ...draft, position: { ...draft.position, rotation: rotate90(draft.position.rotation) } })
+    updateDraft({ ...draft, position: resting(draft, draft.position.x, draft.position.z, rotate90(draft.position.rotation)) })
   }
   function rotateSelected() {
     if (!selected) return
-    const position = { ...selected.placement, rotation: rotate90(selected.placement.rotation) }
+    const moving: Draft = { furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture',
+      model: selected.model, position: selected.placement, movingId: selected.placement.id }
+    const position = resting(moving, selected.placement.x, selected.placement.z, rotate90(selected.placement.rotation))
     const invalidRotation = validatePlacement(selected.model, position, instances, selected.placement.id)
     if (invalidRotation) { setError(invalidRotation); return }
     updateDraft({ furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture', model: selected.model,
@@ -125,13 +130,13 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
       dragOffset.current = id === 'preview'
         ? { x: draft.position.x - position.x, z: draft.position.z - position.z }
         : { x: 0, z: 0 }
-      updateDraft({ ...draft, position: { ...draft.position,
-        x: position.x + dragOffset.current.x, z: position.z + dragOffset.current.z } })
+      updateDraft({ ...draft, position: resting(draft, position.x + dragOffset.current.x, position.z + dragOffset.current.z) })
       return true
     }
     if (selected && id === selected.placement.id) {
       const moving: Draft = { furnitureId: selected.placement.furniture_id, name: selected.name ?? 'Furniture', model: selected.model,
-        position: { x: selected.placement.x, z: selected.placement.z, rotation: selected.placement.rotation }, movingId: selected.placement.id }
+        position: { x: selected.placement.x, y: selected.placement.y, z: selected.placement.z,
+          rotation: selected.placement.rotation }, movingId: selected.placement.id }
       dragOrigin.current = moving
       dragOffset.current = position ? { x: moving.position.x - position.x, z: moving.position.z - position.z } : { x: 0, z: 0 }
       updateDraft(moving)
@@ -141,14 +146,14 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   }
   function dragTo(position: { x: number; z: number }) {
     const current = draftRef.current
-    if (current) updateDraft({ ...current, position: { ...current.position,
-      x: position.x + dragOffset.current.x, z: position.z + dragOffset.current.z } })
+    if (current) updateDraft({ ...current, position: resting(current,
+      position.x + dragOffset.current.x, position.z + dragOffset.current.z) })
   }
   function endDrag(position: { x: number; z: number } | null) {
     let current = draftRef.current
     if (!current) return
-    if (position) current = { ...current, position: { ...current.position,
-      x: position.x + dragOffset.current.x, z: position.z + dragOffset.current.z } }
+    if (position) current = { ...current, position: resting(current,
+      position.x + dragOffset.current.x, position.z + dragOffset.current.z) }
     dragOrigin.current = null
     if (!current.movingId) { updateDraft(current); return }
     const issue = validatePlacement(current.model, current.position, instances, current.movingId)
@@ -173,6 +178,7 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
   const visibleInstances = instances.filter(item => item.placement.id !== hiddenId)
     .filter(item => !(busy && draft && !draft.movingId && item.placement.furniture_id === draft.furnitureId
       && item.placement.x === draft.position.x && item.placement.z === draft.position.z
+      && item.placement.y === draft.position.y
       && item.placement.rotation === draft.position.rotation))
     .map(item => item.placement.id === draft?.movingId
       ? { ...item, placement: { ...item.placement, ...draft.position } as PlacedFurniture } : item)

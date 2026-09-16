@@ -5,7 +5,7 @@ import { MOUSE, TOUCH, Vector3, type InstancedMesh, type PerspectiveCamera } fro
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { EDITOR_SIZE } from '../voxel/model'
 import { VoxelMesh } from '../voxel/VoxelMesh'
-import { ROOM_DEPTH, ROOM_WIDTH, ROOM_WALL_HEIGHT, VOXEL_UNIT } from './config'
+import { ROOM_DEPTH, ROOM_DEPTH_VOXELS, ROOM_WIDTH, ROOM_WIDTH_VOXELS, ROOM_WALL_HEIGHT, VOXEL_UNIT } from './config'
 import { roomTransform, type RoomInstance } from './model'
 import { placementBounds } from './placement'
 import { bindRoomPointerInput, pickRoomItem, pickRoomPosition } from './input'
@@ -30,8 +30,8 @@ function FitRoomCamera() {
 function FloorGrid() {
   const positions = useMemo(() => {
     const lines: number[] = []
-    for (let x = 0; x <= ROOM_WIDTH; x++) lines.push(x - ROOM_WIDTH / 2, 0.005, -ROOM_DEPTH / 2, x - ROOM_WIDTH / 2, 0.005, ROOM_DEPTH / 2)
-    for (let z = 0; z <= ROOM_DEPTH; z++) lines.push(-ROOM_WIDTH / 2, 0.005, z - ROOM_DEPTH / 2, ROOM_WIDTH / 2, 0.005, z - ROOM_DEPTH / 2)
+    for (let x = 0; x <= ROOM_WIDTH_VOXELS; x++) lines.push(x * VOXEL_UNIT - ROOM_WIDTH / 2, 0.005, -ROOM_DEPTH / 2, x * VOXEL_UNIT - ROOM_WIDTH / 2, 0.005, ROOM_DEPTH / 2)
+    for (let z = 0; z <= ROOM_DEPTH_VOXELS; z++) lines.push(-ROOM_WIDTH / 2, 0.005, z * VOXEL_UNIT - ROOM_DEPTH / 2, ROOM_WIDTH / 2, 0.005, z * VOXEL_UNIT - ROOM_DEPTH / 2)
     return new Float32Array(lines)
   }, [])
   return <lineSegments><bufferGeometry><bufferAttribute attach="attributes-position" args={[positions, 3]} /></bufferGeometry>
@@ -49,8 +49,9 @@ export function PlacedVoxelModel({ instance, opacity = 1 }: { instance: RoomInst
 }
 function Footprint({ instance, color }: { instance: RoomInstance; color: string }) {
   const bounds = placementBounds(instance.model, instance.placement)
-  return <mesh position={[(bounds.x + bounds.maxX) / 2 - ROOM_WIDTH / 2, 0.03, (bounds.z + bounds.maxZ) / 2 - ROOM_DEPTH / 2]}>
-    <boxGeometry args={[bounds.maxX - bounds.x, 0.04, bounds.maxZ - bounds.z]} />
+  return <mesh position={[(bounds.x + bounds.maxX) * VOXEL_UNIT / 2 - ROOM_WIDTH / 2,
+    bounds.y * VOXEL_UNIT + 0.03, (bounds.z + bounds.maxZ) * VOXEL_UNIT / 2 - ROOM_DEPTH / 2]}>
+    <boxGeometry args={[(bounds.maxX - bounds.x) * VOXEL_UNIT, 0.04, (bounds.maxZ - bounds.z) * VOXEL_UNIT]} />
     <meshBasicMaterial color={color} wireframe depthTest={false} />
   </mesh>
 }
