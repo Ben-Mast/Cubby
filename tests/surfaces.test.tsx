@@ -8,6 +8,7 @@ import { identities } from '../src/features/auth/identities'
 import { createSurface, updateSurface, deleteSurface, applySurface, listSurfacesForHome } from '../src/features/surfaces/data'
 import { cellsOnLine, initialPixelHistory, pixelReducer, resizePixels, validatePixels } from '../src/features/surfaces/model'
 import { surfaceTextureRepeat } from '../src/features/surfaces/texture'
+import { drawSurfacePreview, SurfacePreview } from '../src/features/surfaces/SurfacePreview'
 import { useSurfaceLibrary } from '../src/features/surfaces/useSurfaceLibrary'
 import { useSharedRoom } from '../src/features/room/useSharedRoom'
 import { LocalSurfaceEditor } from '../src/routes/SurfaceEditorPage'
@@ -41,6 +42,36 @@ test('pixel strokes, undo/redo, clear, resizing, validation, and tiling are dete
   assert.throws(() => validatePixels(2, 2, pixels.slice(1)))
   assert.deepEqual(surfaceTextureRepeat({ width: 4, height: 2 }, 32, 12), [8, 6])
   assert.deepEqual(surfaceTextureRepeat({ width: 4, height: 2 }, 64, 24), [16, 12])
+})
+test('surface library preview paints crisp pixels and repeats a small tile', () => {
+  const originalDocument = globalThis.document
+  const tileCells: any[] = []
+  const tile = { width: 0, height: 0, getContext: () => ({ fillStyle: '', fillRect(x: number, y: number, width: number, height: number) {
+    tileCells.push([x, y, width, height, this.fillStyle])
+  } }) }
+  ;(globalThis as any).document = { createElement: () => tile }
+  const calls: any[] = []
+  const context: any = { imageSmoothingEnabled: true, createPattern: (_source: any, repeat: string) => { calls.push(repeat); return 'pattern' },
+    clearRect() {}, save() {}, restore() {}, scale(x: number, y: number) { calls.push([x, y]) },
+    fillRect(x: number, y: number, width: number, height: number) { calls.push([x, y, width, height]) } }
+  try {
+    drawSurfacePreview(context, { id: 'surface', home_id: 'shared-home', creator_id: 'user-one', name: 'Tiles', type: 'floor',
+      width: 2, height: 2, pixel_data: { version: 1, pixels }, created_at: '', updated_at: '' })
+    assert.equal(context.imageSmoothingEnabled, false)
+    assert.deepEqual(tileCells.map(cell => cell.slice(0, 2)), [[0, 0], [1, 0], [0, 1], [1, 1]])
+    assert.ok(calls.includes('repeat'))
+    assert.ok(calls.find(call => Array.isArray(call) && call.length === 4 && call[2] > 2), 'preview spans multiple tiles')
+  } finally { (globalThis as any).document = originalDocument }
+})
+test('surface library renders a preview canvas for each saved pattern', async () => {
+  mock.reset(); signIn()
+  await createSurface('Tiles', 'floor', 2, 2, pixels)
+  let renderer: any
+  await act(async () => { renderer = create(<MemoryRouter initialEntries={['/surfaces']}><AuthProvider><App /></AuthProvider></MemoryRouter>) })
+  const preview = renderer.root.findAllByType('canvas').find((node: any) => node.props['aria-label'] === 'Tiles repeating pattern preview')
+  assert.ok(preview)
+  assert.equal(Number(preview.props.width), 128)
+  await act(async () => renderer.unmount())
 })
 
 test('shared surface CRUD/apply uses the home, creator, and safe type', async () => {
@@ -131,6 +162,9 @@ test('room toolbar applies floor and wall designs without remounting the scene',
   assert.equal(scene().props.floorSurface, null)
   await act(async () => button(renderer, 'Open surface picker').props.onClick())
   assert.ok(renderer.root.findByProps({ 'aria-label': 'Choose room surfaces' }))
+  const previews = renderer.root.findAllByType(SurfacePreview)
+  assert.deepEqual(previews.map((preview: any) => preview.props.surface.name), ['Floor tiles', 'Wall stripes'])
+  assert.equal(renderer.root.findAllByType('canvas').filter((canvas: any) => canvas.props.className?.includes('surface-preview')).length, 2)
   await act(async () => button(renderer, 'Apply Floor tiles to floor').props.onClick())
   assert.equal(mock.home.floor_surface_id, floor.id)
   assert.equal(scene().props.floorSurface?.id, floor.id)

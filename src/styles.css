@@ -244,6 +244,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .furniture-list { list-style: none; padding: 0; display: grid; gap: 1rem; }
 .furniture-list li, .delete-confirmation { padding: 1rem; border: 1px solid #d6d0f0; border-radius: 0.75rem; background: white; }
 .furniture-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.library-preview { width: 84px; height: 84px; flex: none; border-radius: 0.55rem; background: #f4f1fc; object-fit: contain; overflow: hidden; }
+.furniture-preview { display: grid; place-items: center; }
+.furniture-preview img { width: 100%; height: 100%; object-fit: contain; }
+.furniture-preview svg { width: 2rem; height: 2rem; color: #8276a4; }
+.surface-preview { image-rendering: pixelated; }
+.library-card-details { flex: 1 1 10rem; min-width: 0; }
 .furniture-list h2, .delete-confirmation h2 { margin: 0; overflow-wrap: anywhere; }
 .furniture-list p { margin-bottom: 0; }
 .delete-confirmation { border-color: #9e263d; }
@@ -301,7 +307,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visibl
 .room-bottom-toolbar .primary-wide { flex: 1; }
 .danger-button { color: #9e263d !important; border-color: #d88a99 !important; }
 .furniture-tray { display: flex; gap: 0.65rem; margin-top: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; }
-.furniture-tray > button { display: grid; flex: 0 0 min(12rem, 70vw); min-height: 76px; gap: 0.25rem; padding: 0.75rem; scroll-snap-align: start; border: 1px solid #b9b1da; border-radius: 0.75rem; color: #332b74; background: #f4f2ff; text-align: left; }
+.furniture-tray > button { display: flex; flex: 0 0 min(12rem, 70vw); min-height: 88px; align-items: center; gap: 0.5rem; padding: 0.5rem; scroll-snap-align: start; border: 1px solid #b9b1da; border-radius: 0.75rem; color: #332b74; background: #f4f2ff; text-align: left; }
+.furniture-tray .library-preview { width: 64px; height: 64px; }
+.furniture-tray-label { display: grid; min-width: 0; gap: 0.25rem; overflow-wrap: anywhere; }
 .furniture-tray small { color: #696379; }
 .floating-status { position: absolute; z-index: 6; top: 4rem; left: 50%; max-width: calc(100% - 2rem); margin: 0; padding: 0.5rem 0.75rem; transform: translateX(-50%); border-radius: 0.65rem; background: rgb(255 255 255 / 92%); box-shadow: 0 4px 18px rgb(37 33 61 / 14%); }
 .placement-feedback { position: absolute; z-index: 6; right: 0.75rem; bottom: 4.4rem; left: 0.75rem; margin: 0; padding: 0.45rem 0.7rem; border-radius: 0.6rem; color: white; background: #9e263d; font-size: 0.85rem; text-align: center; }

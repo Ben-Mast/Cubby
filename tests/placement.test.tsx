@@ -7,6 +7,7 @@ import { lowestRestingPosition, placementBounds, rotate90, snapFloorPoint, valid
 import { reconstructRoomModel, type RoomInstance } from '../src/features/room/model'
 import { createPlacement, fetchSharedRoom, removePlacement, updatePlacement, updateRoomDimensions } from '../src/features/room/data'
 import { RoomWorkspace } from '../src/routes/RoomPage'
+import { FurnitureThumbnail } from '../src/features/furniture/FurnitureThumbnail'
 import { mock } from './mockSupabase'
 import { PerspectiveCamera, Vector3, Scene, Group, Mesh, BoxGeometry, MeshBasicMaterial } from 'three'
 import { pickRoomItem, pickRoomPosition } from '../src/features/room/input'
@@ -298,6 +299,41 @@ test('library Place in Room links to protected room placement mode and saves thr
   assert.equal(mock.placements.length,1)
   assert.equal(mock.placements[0].x,4)
   assert.match(JSON.stringify(renderer.toJSON()), /1.*instances/)
+  await act(async () => renderer.unmount())
+})
+
+test('room picker reuses saved thumbnails, falls back when missing, and selects on tap', async () => {
+  setup()
+  const path = 'shared-home/design/saved.webp'
+  mock.storageFiles.set(path, new Blob(['image'], { type: 'image/webp' }))
+  const room = { home: { id: 'shared-home', name: 'Home', created_at: '', width: 64, depth: 64, height: 16 },
+    instances: [] as RoomInstance[], warnings: [], furniture: [
+      { id: 'design', home_id: 'shared-home', creator_id: 'user-one', name: 'Bench', thumbnail_path: path,
+        created_at: '', updated_at: '', creator: { display_name: 'Ben' } },
+      { id: 'missing', home_id: 'shared-home', creator_id: 'user-one', name: 'No image', thumbnail_path: null,
+        created_at: '', updated_at: '', creator: { display_name: 'Ben' } },
+    ] }
+  let renderer: any
+  function Harness() {
+    const [picked, setPicked] = useState<typeof design | null>(null)
+    return <MemoryRouter><RoomWorkspace room={room} design={picked} refresh={() => {}}
+      clearDesign={() => setPicked(null)} chooseFurniture={id => { if (id === 'design') setPicked(design) }} /></MemoryRouter>
+  }
+  await act(async () => { renderer = create(<Harness />) })
+  const button = (name: string) => renderer.root.findAllByType('button').find((node: any) => node.props['aria-label'] === name)
+  await act(async () => button('Open furniture picker').props.onClick())
+  const previews = renderer.root.findAllByType(FurnitureThumbnail)
+  assert.equal(previews.length, 2)
+  assert.equal(previews[0].props.path, path)
+  assert.equal(previews[1].props.path, null)
+  assert.equal(renderer.root.findAllByType('img').length, 1)
+  assert.match(renderer.root.findByType('img').props.src, /shared-home\/design\/saved.webp$/)
+  assert.equal(mock.storageCalls.filter(call => call.operation === 'upload').length, 0)
+  assert.ok(button('Place No image').findAllByType('svg').length > 0, 'missing thumbnail shows fallback icon')
+  await act(async () => button('Place Bench').props.onClick())
+  assert.equal(renderer.root.findAllByProps({ 'aria-label': 'Choose furniture' }).length, 0)
+  const scene = renderer.root.findAllByType('div').find((node: any) => node.props['data-scene-props'])!.props['data-scene-props']
+  assert.equal(scene.preview.placement.furniture_id, 'design')
   await act(async () => renderer.unmount())
 })
 

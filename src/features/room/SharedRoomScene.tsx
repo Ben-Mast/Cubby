@@ -102,17 +102,6 @@ function FitRoomCamera({ dimensions }: { dimensions: RoomDimensions }) {
   return null
 }
 
-function FloorGrid({ dimensions }: { dimensions: RoomDimensions }) {
-  const positions = useMemo(() => {
-    const lines: number[] = []
-    const width = dimensions.width * VOXEL_UNIT, depth = dimensions.depth * VOXEL_UNIT
-    for (let x = 0; x <= dimensions.width; x++) lines.push(x * VOXEL_UNIT - width / 2, 0.005, -depth / 2, x * VOXEL_UNIT - width / 2, 0.005, depth / 2)
-    for (let z = 0; z <= dimensions.depth; z++) lines.push(-width / 2, 0.005, z * VOXEL_UNIT - depth / 2, width / 2, 0.005, z * VOXEL_UNIT - depth / 2)
-    return new Float32Array(lines)
-  }, [dimensions.width, dimensions.depth])
-  return <lineSegments><bufferGeometry><bufferAttribute attach="attributes-position" args={[positions, 3]} /></bufferGeometry>
-    <lineBasicMaterial color="#aaa3cb" /></lineSegments>
-}
 export function PlacedVoxelModel({ instance, dimensions = DEFAULT_ROOM_DIMENSIONS, opacity = 1 }: { instance: RoomInstance; dimensions?: RoomDimensions; opacity?: number }) {
   const meshRef = useRef<InstancedMesh>(null)
   const transform = roomTransform(instance.placement, instance.model, dimensions)
@@ -182,14 +171,13 @@ export function SharedRoomScene({ instances, dimensions = DEFAULT_ROOM_DIMENSION
   const controlsRef = useRef<OrbitControlsImpl>(null)
   const mouseButtons = useMemo(() => ({ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }), [])
   const touches = useMemo(() => ({ ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_ROTATE }), [])
-  return <div className="scene room-scene" aria-label="Shared 3D room with floor grid and furniture">
+  return <div className="scene room-scene" aria-label="Shared 3D room with furniture">
     <Canvas camera={{ position: [15, 14, 15], fov: 45, near: 0.1, far: 500 }} dpr={[1, 1.5]}
       frameloop="demand" gl={{ antialias: true }} onCreated={({ camera }) => camera.lookAt(0, 1, 0)}>
       <color attach="background" args={['#e8e4ff']} />
       <FitRoomCamera dimensions={dimensions} />
       <ambientLight intensity={1.5} /><directionalLight position={[10, 15, 8]} intensity={2} />
       <RoomFloor dimensions={dimensions} surface={floorSurface} />
-      <FloorGrid dimensions={dimensions} />
       <RoomInput {...input} dimensions={dimensions} selectedId={selectedId} preview={preview} controlsRef={controlsRef} />
       <RoomWalls dimensions={dimensions} surface={wallSurface} />
       {instances.map(instance => <PlacedVoxelModel key={instance.placement.id} instance={instance} dimensions={dimensions} />)}

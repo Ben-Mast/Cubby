@@ -1,17 +1,18 @@
 import { supabase } from '../../lib/supabase/client'
 import { fetchCurrentHome } from '../home/currentHome'
 import { DEFAULT_VOXEL_SIZE, deserializeModel, serializeModel, validVoxelSize, type VoxelData, type VoxelModel, type VoxelSize } from '../voxel/model'
+import { removeFurnitureThumbnail, uploadFurnitureThumbnail } from './thumbnail'
 
 export interface FurnitureSummary {
-  id: string; home_id: string; creator_id: string; name: string; created_at: string; updated_at: string
+  id: string; home_id: string; creator_id: string; name: string; thumbnail_path: string | null; created_at: string; updated_at: string
   creator: { display_name: string } | null
 }
 export interface FurnitureRecord {
-  id: string; home_id: string; creator_id: string; name: string; voxel_data: VoxelData
+  id: string; home_id: string; creator_id: string; name: string; voxel_data: VoxelData; thumbnail_path: string | null
   size_x: number; size_y: number; size_z: number
   created_at: string; updated_at: string
 }
-const recordColumns = 'id, home_id, creator_id, name, voxel_data, size_x, size_y, size_z, created_at, updated_at'
+const recordColumns = 'id, home_id, creator_id, name, voxel_data, size_x, size_y, size_z, thumbnail_path, created_at, updated_at'
 // Used by room reads after resolving the authenticated home. RLS still applies.
 export async function getFurnitureDefinitions(homeId: string, ids: readonly string[]): Promise<FurnitureRecord[]> {
   const uniqueIds = [...new Set(ids)]
@@ -34,7 +35,7 @@ export async function listFurniture(): Promise<FurnitureSummary[]> {
 }
 export async function listFurnitureForHome(homeId: string): Promise<FurnitureSummary[]> {
   const { data, error } = await supabase.from('furniture')
-    .select('id, home_id, creator_id, name, created_at, updated_at, creator:profiles!furniture_creator_id_fkey(display_name)')
+    .select('id, home_id, creator_id, name, thumbnail_path, created_at, updated_at, creator:profiles!furniture_creator_id_fkey(display_name)')
     .eq('home_id', homeId).order('created_at', { ascending: false }).order('id')
   if (error) throw new Error('Unable to load furniture. Check your connection and try again.')
   return (data ?? []) as unknown as FurnitureSummary[]
@@ -59,16 +60,38 @@ export async function createFurniture(name: string, model: VoxelModel, size: Vox
   const { data, error } = await supabase.from('furniture')
     .insert({ ...values, home_id: home.id, creator_id: user.id }).select(recordColumns).single<FurnitureRecord>()
   if (error || !data) throw new Error('Unable to confirm the save. Check your connection and the library before retrying.')
-  return data
+  return saveThumbnail(data, model)
 }
 export async function updateFurniture(id: string, name: string, model: VoxelModel, size: VoxelSize = DEFAULT_VOXEL_SIZE): Promise<FurnitureRecord> {
   const values = validateFurniture(name, model, size)
   const home = await fetchCurrentHome()
+  const { data: previous } = await supabase.from('furniture').select('thumbnail_path, voxel_data')
+    .eq('home_id', home.id).eq('id', id).maybeSingle<{ thumbnail_path: string | null; voxel_data: VoxelData }>()
+  const designChanged = !previous || serializeModel(deserializeModel(JSON.stringify(previous.voxel_data)), previous.voxel_data.size) !== serializeModel(model, size)
+  // A failed regeneration should show the fallback, never an image of an older design.
   // Ownership/home stay unchanged; the existing trigger owns updated_at.
-  const { data, error } = await supabase.from('furniture').update(values)
+  const { data, error } = await supabase.from('furniture').update(designChanged ? { ...values, thumbnail_path: null } : values)
     .eq('home_id', home.id).eq('id', id).select(recordColumns).single<FurnitureRecord>()
   if (error || !data) throw new Error('Unable to save edits. Check your connection; the furniture may have been deleted.')
-  return data
+  if (!designChanged && data.thumbnail_path) return data
+  const saved = await saveThumbnail(data, model)
+  if (previous?.thumbnail_path) {
+    try { await removeFurnitureThumbnail(previous.thumbnail_path) } catch { /* cleanup is best effort */ }
+  }
+  return saved
+}
+async function saveThumbnail(record: FurnitureRecord, model: VoxelModel): Promise<FurnitureRecord> {
+  let path: string | null = null
+  try {
+    path = await uploadFurnitureThumbnail(record.home_id, record.id, model)
+    const { data, error } = await supabase.from('furniture').update({ thumbnail_path: path })
+      .eq('home_id', record.home_id).eq('id', record.id).select(recordColumns).single<FurnitureRecord>()
+    if (error || !data) throw error ?? new Error('Unable to attach thumbnail.')
+    return data
+  } catch {
+    if (path) { try { await removeFurnitureThumbnail(path) } catch { /* orphan cleanup is best effort */ } }
+    return record
+  }
 }
 async function placementCount(homeId: string, id: string): Promise<number> {
   const { count, error } = await supabase.from('placed_furniture').select('id', { count: 'exact', head: true })
@@ -87,7 +110,12 @@ export async function deleteFurniture(id: string, confirmedCount: number): Promi
   if (confirmedCount < 0 || !Number.isInteger(confirmedCount)) throw new Error('Confirm the placed-copy count before deleting.')
   const count = await placementCount(home.id, id)
   if (count !== confirmedCount) throw new PlacementCountChangedError(count)
+  const { data: record } = await supabase.from('furniture').select('thumbnail_path')
+    .eq('home_id', home.id).eq('id', id).maybeSingle<{ thumbnail_path: string | null }>()
   const { data, error } = await supabase.from('furniture').delete()
     .eq('home_id', home.id).eq('id', id).select('id').single<{ id: string }>()
   if (error || !data) throw new Error('Unable to delete furniture. Refresh the library and try again.')
+  if (record?.thumbnail_path) {
+    try { await removeFurnitureThumbnail(record.thumbnail_path) } catch { /* cleanup is best effort */ }
+  }
 }

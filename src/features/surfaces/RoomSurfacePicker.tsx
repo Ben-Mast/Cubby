@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 import { applySurface } from './data'
 import { useSurfaceLibrary } from './useSurfaceLibrary'
 import type { SurfaceType } from './model'
+import { SurfacePreview } from './SurfacePreview'
 
 export function RoomSurfacePicker({ onClose, onApplied }: { onClose: () => void; onApplied: () => void }) {
   const { items, currentHome, loading, error, syncError, refresh } = useSurfaceLibrary()
@@ -34,7 +35,10 @@ export function RoomSurfacePicker({ onClose, onApplied }: { onClose: () => void;
         {items.filter(item => item.type === type).map(item => <button key={item.id}
           aria-label={`Apply ${item.name} to ${type === 'floor' ? 'floor' : 'walls'}`}
           aria-pressed={applied(type) === item.id} disabled={saving || applied(type) === item.id}
-          onClick={() => void choose(item.id, type)}><strong>{item.name}</strong><small>by {item.creator?.display_name ?? 'Unknown'}</small></button>)}
+          onClick={() => void choose(item.id, type)}>
+          <SurfacePreview surface={item} />
+          <span className="furniture-tray-label"><strong>{item.name}</strong><small>by {item.creator?.display_name ?? 'Unknown'}</small></span>
+        </button>)}
       </div>
     </div>)}
     {!loading && !error && !items.length && <p>No saved surfaces yet. <Link to="/surfaces">Open the surface library</Link> to create one.</p>}

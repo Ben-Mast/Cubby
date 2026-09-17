@@ -4,6 +4,7 @@ import { Check, HousePlus, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-rea
 import { useAuth } from '../features/auth/AuthProvider'
 import { countPlacedInstances, deleteFurniture, PlacementCountChangedError, type FurnitureSummary } from '../features/furniture/data'
 import { useFurnitureLibrary } from '../features/furniture/useFurnitureLibrary'
+import { FurnitureThumbnail } from '../features/furniture/FurnitureThumbnail'
 import { useHeaderAction } from '../app/AppShell'
 
 export function FurniturePage() {
@@ -54,7 +55,8 @@ function FurnitureLibrary() {
     {syncError && <p role="status" className="auth-error">{syncError}</p>}
     {!loading && !error && !items.length && <p>No furniture yet.</p>}
     <ul className="furniture-list">{items.map(item => <li key={item.id}>
-      <div><h2>{item.name}</h2><p>Created by {item.creator?.display_name ?? 'Unknown creator'}</p></div>
+      <FurnitureThumbnail path={item.thumbnail_path} name={item.name} />
+      <div className="library-card-details"><h2>{item.name}</h2><p>Created by {item.creator?.display_name ?? 'Unknown creator'}</p></div>
       <div className="icon-actions"><Link className="icon-button" aria-label={`Edit ${item.name}`} title="Edit" to={`/furniture/${item.id}/edit`}><Pencil aria-hidden="true" /></Link>
         <Link className="icon-button primary-icon" aria-label={`Place ${item.name} in room`} title="Place in room" to={`/room?place=${encodeURIComponent(item.id)}`}><HousePlus aria-hidden="true" /></Link>
         <button className="icon-button danger-icon" aria-label={`Delete ${item.name}`} title="Delete" disabled={busy || Boolean(pending)} onClick={() => void prepare(item)}><Trash2 aria-hidden="true" /></button></div>

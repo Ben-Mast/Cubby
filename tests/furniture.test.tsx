@@ -10,6 +10,7 @@ import { mock } from './mockSupabase'
 import { identities } from '../src/features/auth/identities'
 import { createFurniture, listFurniture, getFurniture, updateFurniture, countPlacedInstances, deleteFurniture, PlacementCountChangedError } from '../src/features/furniture/data'
 import { editModel, serializeModel } from '../src/features/voxel/model'
+import { renderFurnitureThumbnail } from '../src/features/furniture/thumbnail'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const model = editModel(new Map(), 'add', { x: 5, y: 0, z: 5 }, '#8b5e3c')
@@ -39,9 +40,51 @@ test('CRUD uses resolved home and authenticated creator; second user reads/updat
   assert.equal(updated.updated_at, '2026-09-15T01:00:00Z'); assert.equal(mock.furniture.size, 1)
   assert.deepEqual((await getFurniture(created.id)).voxel_data, JSON.parse(serializeModel(painted)))
   const update = mock.queryCalls.find(call => call.operation === 'update')
-  assert.deepEqual(Object.keys(update.values).sort(), ['name', 'size_x', 'size_y', 'size_z', 'voxel_data'])
+  assert.deepEqual(Object.keys(update.values).sort(), ['name', 'size_x', 'size_y', 'size_z', 'thumbnail_path', 'voxel_data'])
   for (const call of mock.queryCalls.filter(call => call.table === 'furniture' && call.operation !== 'insert'))
     assert.ok(call.filters.some(([column, value]: any[]) => column === 'home_id' && value === 'shared-home'))
+})
+test('thumbnail renders once at create/design edit, uses Storage paths, and survives image failure', async () => {
+  mock.reset(); signIn(0)
+  const originalDocument = globalThis.document
+  const faces: string[] = []
+  ;(globalThis as any).document = { createElement: () => ({
+    width: 0, height: 0,
+    getContext: () => ({ fillStyle: '', beginPath() {}, moveTo() {}, lineTo() {}, closePath() {},
+      fill() { faces.push('face') } }),
+    toBlob(callback: (blob: Blob) => void) { callback(new Blob(['image'], { type: 'image/webp' })) },
+  }) }
+  try {
+    const blob = await renderFurnitureThumbnail(model)
+    assert.equal(blob.type, 'image/webp'); assert.ok(faces.length > 0)
+    const created = await createFurniture('Thumb chair', model)
+    assert.match(created.thumbnail_path!, /^shared-home\/furniture-1\/.+\.webp$/)
+    assert.equal(mock.storageFiles.size, 1)
+    const sameDesign = await updateFurniture(created.id, 'New name', model)
+    assert.equal(sameDesign.thumbnail_path, created.thumbnail_path)
+    assert.equal(mock.storageCalls.filter(call => call.operation === 'upload').length, 1)
+    const painted = editModel(model, 'paint', { x: 5, y: 0, z: 5 }, '#ffffff')
+    const changed = await updateFurniture(created.id, 'New name', painted)
+    assert.notEqual(changed.thumbnail_path, created.thumbnail_path)
+    assert.equal(mock.storageFiles.size, 1, 'replaced thumbnail is cleaned up')
+    mock.storageError = { message: 'Storage offline' }
+    const failed = await updateFurniture(created.id, 'New name', model)
+    assert.equal(failed.thumbnail_path, null, 'older design image is not displayed after failure')
+    assert.deepEqual((await getFurniture(created.id)).voxel_data, JSON.parse(serializeModel(model)))
+  } finally { (globalThis as any).document = originalDocument }
+})
+test('library uses a signed thumbnail image and falls back if the image cannot load', async () => {
+  mock.reset(); signIn(0)
+  mock.furniture.set('preview-1', { id: 'preview-1', home_id: 'shared-home', creator_id: 'user-one', name: 'Chair',
+    thumbnail_path: 'shared-home/preview-1/image.webp', created_at: '', updated_at: '' })
+  mock.storageFiles.set('shared-home/preview-1/image.webp', new Blob(['image'], { type: 'image/webp' }))
+  const renderer = await mount('/furniture')
+  const image = renderer.root.findByType('img')
+  assert.equal(image.props.alt, 'Chair preview')
+  assert.match(image.props.src, /shared-home\/preview-1\/image.webp$/)
+  await act(async () => image.props.onError())
+  assert.equal(renderer.root.findAllByType('img').length, 0)
+  await act(async () => renderer.unmount())
 })
 test('empty names/models, logged-out access, missing membership and inaccessible records fail', async () => {
   mock.reset(); signIn(0)

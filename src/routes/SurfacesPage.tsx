@@ -4,6 +4,7 @@ import { Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthProvider'
 import { applySurface, deleteSurface } from '../features/surfaces/data'
 import { useSurfaceLibrary } from '../features/surfaces/useSurfaceLibrary'
+import { SurfacePreview } from '../features/surfaces/SurfacePreview'
 import type { SurfaceDesign, SurfaceType } from '../features/surfaces/model'
 import { useHeaderAction } from '../app/AppShell'
 
@@ -42,7 +43,8 @@ function SurfaceLibrary() {
     </div>}
     {!loading && !error && !items.length && <p>No surfaces yet.</p>}
     <ul className="furniture-list surface-list">{items.map(item => <li key={item.id}>
-      <div><h2>{item.name}</h2><p>{item.type === 'floor' ? 'Floor' : 'Wall'} · {item.width}×{item.height} · Created by {item.creator?.display_name ?? 'Unknown creator'}
+      <SurfacePreview surface={item} />
+      <div className="library-card-details"><h2>{item.name}</h2><p>{item.type === 'floor' ? 'Floor' : 'Wall'} · {item.width}×{item.height} · Created by {item.creator?.display_name ?? 'Unknown creator'}
         {applied(item.type) === item.id ? ' · Applied' : ''}</p></div>
       <div className="icon-actions">
         <button className="icon-button primary-icon" aria-label={`Apply ${item.name} to ${item.type === 'floor' ? 'floor' : 'walls'}`} title="Apply"

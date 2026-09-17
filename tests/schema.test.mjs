@@ -339,5 +339,45 @@ test('migration/setup execute and enforce API grants, RLS, constraints, and casc
       await asRole('anon', null, async () => denied('select * from public.surfaces'))
       assert.ok((await db.query("select tablename from pg_publication_tables where pubname='supabase_realtime'")).rows.some(row => row.tablename === 'surfaces'))
     })
+    await t.test('thumbnail bucket and paths allow home members but not outsiders', async () => {
+      // Supabase provides these tables; the in-memory test needs only their policy-facing columns.
+      await db.exec(`create schema storage;
+        create table storage.buckets(id text primary key, name text not null, "public" boolean not null,
+          file_size_limit bigint, allowed_mime_types text[]);
+        create table storage.objects(id uuid primary key default gen_random_uuid(), bucket_id text not null, name text not null);
+        alter table storage.objects enable row level security;
+        grant usage on schema storage to authenticated;
+        grant select, insert, delete on storage.objects to authenticated;`)
+      await db.exec(readFileSync('supabase/migrations/202609160005_furniture_thumbnails.sql', 'utf8'))
+      const bucket = (await db.query("select \"public\",file_size_limit,allowed_mime_types from storage.buckets where id='furniture-thumbnails'")).rows[0]
+      assert.equal(bucket.public, false)
+      assert.deepEqual(bucket.allowed_mime_types, ['image/webp', 'image/png'])
+      const imageModel = JSON.stringify({ version: 1, size: [16, 16, 16], voxels: [{ x: 0, y: 0, z: 0, color: '#ffffff' }] })
+      const id = (await db.query("insert into public.furniture(home_id,creator_id,name,voxel_data) values ($1,$2,'Image test',$3) returning id", [homeId, userOne, imageModel])).rows[0].id
+      const path = `${homeId}/${id}/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.webp`
+      await asRole('authenticated', userOne, async () => {
+        const parts = (await db.query(`select private.is_home_member($1) as member,
+          split_part($2,'/',3) ~ '^[0-9a-f-]+[.](webp|png)$' as filename,
+          exists(select 1 from public.furniture f where f.home_id::text=split_part($2,'/',1)
+            and f.id::text=split_part($2,'/',2) and private.is_home_member(f.home_id)) as furniture`, [homeId, path])).rows[0]
+        assert.deepEqual(parts, { member: true, filename: true, furniture: true })
+        await db.query('update public.furniture set thumbnail_path=$1 where id=$2', [path, id])
+        await db.query("insert into storage.objects(bucket_id,name) values ('furniture-thumbnails',$1)", [path])
+        await denied("insert into storage.objects(bucket_id,name) values ('furniture-thumbnails',$1)", [`${homeId}/${id}/bad.jpg`], '42501')
+        await denied('update public.furniture set thumbnail_path=$1 where id=$2', [`${homeId}/wrong/file.webp`, id], '23514')
+      })
+      await asRole('authenticated', userTwo, async () => {
+        assert.equal((await db.query('select name from storage.objects')).rows[0].name, path)
+      })
+      await asRole('authenticated', outsider, async () => {
+        assert.equal((await db.query('select name from storage.objects')).rows.length, 0)
+        await denied("insert into storage.objects(bucket_id,name) values ('furniture-thumbnails',$1)", [path.replace(/\.webp$/, '-other.webp')], '42501')
+        assert.equal((await db.query('delete from storage.objects where name=$1 returning id', [path])).rows.length, 0)
+      })
+      await asRole('authenticated', userTwo, async () => {
+        assert.equal((await db.query('delete from storage.objects where name=$1 returning id', [path])).rows.length, 1)
+      })
+      await db.query('delete from public.furniture where id=$1', [id])
+    })
   } finally { await db.close() }
 })

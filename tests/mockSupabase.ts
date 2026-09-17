@@ -15,6 +15,9 @@ export const mock = {
   membershipError: null as any,
   homeError: null as any,
   furniture: new Map<string, any>(),
+  storageFiles: new Map<string, Blob>(),
+  storageCalls: [] as any[],
+  storageError: null as any,
   surfaces: new Map<string, any>(),
   surfacesError: null as any,
   placedCounts: new Map<string, number>(),
@@ -39,7 +42,8 @@ export const mock = {
     this.home = { id: 'shared-home', name: 'Our Cubby', created_at: '2026-09-15T00:00:00Z', width: 64, depth: 64, height: 16,
       floor_surface_id: null, wall_surface_id: null }
     this.membershipError = this.homeError = null
-    this.furniture.clear(); this.surfaces.clear(); this.surfacesError = null; this.placedCounts.clear()
+    this.furniture.clear(); this.storageFiles.clear(); this.storageCalls = []; this.storageError = null
+    this.surfaces.clear(); this.surfacesError = null; this.placedCounts.clear()
     this.furnitureError = this.countError = null
     this.placements = []; this.roomError = null; this.roomReadGate = null
     this.channels.clear()
@@ -63,6 +67,29 @@ export const mock = {
 }
 
 export const supabase = {
+  storage: {
+    from(bucket: string) {
+      return {
+        async upload(path: string, blob: Blob, options: any) {
+          mock.storageCalls.push({ operation: 'upload', bucket, path, options })
+          if (mock.storageError) return { data: null, error: mock.storageError }
+          mock.storageFiles.set(path, blob)
+          return { data: { path }, error: null }
+        },
+        async remove(paths: string[]) {
+          mock.storageCalls.push({ operation: 'remove', bucket, paths })
+          if (mock.storageError) return { data: null, error: mock.storageError }
+          paths.forEach(path => mock.storageFiles.delete(path))
+          return { data: paths, error: null }
+        },
+        async createSignedUrl(path: string, expiresIn: number) {
+          mock.storageCalls.push({ operation: 'sign', bucket, path, expiresIn })
+          if (mock.storageError || !mock.storageFiles.has(path)) return { data: null, error: mock.storageError ?? { message: 'Missing image' } }
+          return { data: { signedUrl: `https://example.test/${path}` }, error: null }
+        },
+      }
+    },
+  },
   channel(name: string) {
     const channel: any = {
       name, bindings: [] as any[], statusCallback: null as any,
@@ -116,7 +143,7 @@ export const supabase = {
       const matches = (row: any) => call.filters.every(([column, value]) => row[column] === value) && call.inFilters.every(([column, values]) => values.includes(row[column]))
       if (call.operation === 'insert') {
         const id = `furniture-${mock.nextId++}`
-        const row = { id, ...call.values, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
+        const row = { id, thumbnail_path: null, ...call.values, created_at: '2026-09-15T00:00:00Z', updated_at: '2026-09-15T00:00:00Z' }
         mock.furniture.set(id, row)
         return { data: [row], error: null }
       }

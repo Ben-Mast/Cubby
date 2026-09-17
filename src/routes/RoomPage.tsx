@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Armchair, Check, Maximize2, Paintbrush, RefreshCw, RotateCw, Trash2, X } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthProvider'
 import { getFurniture, type FurnitureRecord } from '../features/furniture/data'
+import { FurnitureThumbnail } from '../features/furniture/FurnitureThumbnail'
 import { SharedRoomScene } from '../features/room/SharedRoomScene'
 import { useSharedRoom } from '../features/room/useSharedRoom'
 import { createPlacement, updatePlacement, removePlacement, updateRoomDimensions, type SharedRoomData } from '../features/room/data'
@@ -232,7 +233,10 @@ export function RoomWorkspace({ room, design, disabled = false, refresh, upsertP
     {pickerOpen && <div className="bottom-sheet furniture-sheet" role="dialog" aria-label="Choose furniture">
       <div className="sheet-heading sheet-heading-end"><button className="icon-button" aria-label="Close furniture picker" title="Close" onClick={() => setPickerOpen(false)}><X aria-hidden="true" /></button></div>
       {room?.furniture.length ? <div className="furniture-tray">{room.furniture.map(item => <button key={item.id}
-        onClick={() => { setPickerOpen(false); chooseFurniture(item.id) }}><strong>{item.name}</strong><small>by {item.creator?.display_name ?? 'Unknown'}</small></button>)}</div>
+        aria-label={`Place ${item.name}`} onClick={() => { setPickerOpen(false); chooseFurniture(item.id) }}>
+        <FurnitureThumbnail path={item.thumbnail_path} name={item.name} />
+        <span className="furniture-tray-label"><strong>{item.name}</strong><small>by {item.creator?.display_name ?? 'Unknown'}</small></span>
+      </button>)}</div>
         : <p>Your shared furniture library is empty.</p>}
     </div>}
     {surfacePickerOpen && <RoomSurfacePicker onClose={() => setSurfacePickerOpen(false)}
