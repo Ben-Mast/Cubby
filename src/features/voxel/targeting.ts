@@ -1,9 +1,9 @@
-import { Plane, Raycaster, Vector2, Vector3, type Camera, type InstancedMesh } from 'three'
+import { InstancedMesh, Matrix4, Plane, Raycaster, Vector2, Vector3, type Camera } from 'three'
 import { coordinateKey, DEFAULT_VOXEL_SIZE, inBounds, type Coordinate, type EditMode, type Voxel, type VoxelModel, type VoxelSize } from './model'
 
 export type Axis = 'x' | 'y' | 'z'
 export interface StrokeTarget { at: Coordinate; plane: Plane; lockedAxis: Axis; lockedValue: number }
-export interface FaceTarget { at: Coordinate; face: string }
+export interface FaceTarget { at: Coordinate; face: string; normal: Coordinate }
 const raycaster = new Raycaster()
 const pointer = new Vector2()
 const intersection = new Vector3()
@@ -27,6 +27,21 @@ export function floorTarget(x: number, z: number, size: VoxelSize = DEFAULT_VOXE
   return inBounds(at, size) ? at : null
 }
 
+/** A raycast-only copy; live Add edits cannot turn into new stroke surfaces. */
+export function createStrokeSnapshotMesh(source: InstancedMesh, voxels: readonly Voxel[], size: VoxelSize): InstancedMesh {
+  const snapshot = new InstancedMesh(source.geometry, source.material, Math.max(voxels.length, 1))
+  snapshot.count = voxels.length
+  const matrix = new Matrix4()
+  voxels.forEach((voxel, index) => {
+    matrix.makeTranslation(voxel.x + 0.5 - size[0] / 2, voxel.y + 0.5, voxel.z + 0.5 - size[2] / 2)
+    snapshot.setMatrixAt(index, matrix)
+  })
+  source.updateMatrixWorld(true)
+  snapshot.matrixWorld.copy(source.matrixWorld)
+  snapshot.computeBoundingSphere()
+  return snapshot
+}
+
 /** Stroke editing follows the visible voxel face at every pointer sample. */
 export function pickFaceTarget(clientX: number, clientY: number, rect: DOMRect, camera: Camera,
   mesh: InstancedMesh, voxels: readonly Voxel[], mode: EditMode, size: VoxelSize = DEFAULT_VOXEL_SIZE): FaceTarget | null {
@@ -39,12 +54,14 @@ export function pickFaceTarget(clientX: number, clientY: number, rect: DOMRect, 
     if (!voxel || !normal) return null
     const axis: Axis = Math.abs(normal.x) > 0.5 ? 'x' : Math.abs(normal.y) > 0.5 ? 'y' : 'z'
     const side = Math.sign(normal[axis])
+    const offset = { x: 0, y: 0, z: 0 }
+    offset[axis] = side
     const at = { x: voxel.x, y: voxel.y, z: voxel.z }
     if (mode === 'add') at[axis] += side
-    return inBounds(at, size) ? { at, face: `${axis}:${side}:${at[axis]}` } : null
+    return inBounds(at, size) ? { at, face: `${axis}:${side}:${at[axis]}`, normal: offset } : null
   }
   const at = mode === 'add' && floor ? floorTarget(floor.x, floor.z, size) : null
-  return at ? { at, face: 'y:1:0' } : null
+  return at ? { at, face: 'floor', normal: { x: 0, y: 1, z: 0 } } : null
 }
 
 function setRay(clientX: number, clientY: number, rect: DOMRect, camera: Camera) {
@@ -131,4 +148,9 @@ export function interpolateCoordinates(from: Coordinate, to: Coordinate): Coordi
 
 export function strokeCoordinates(from: FaceTarget, to: FaceTarget): Coordinate[] {
   return from.face === to.face ? interpolateCoordinates(from.at, to.at) : [to.at]
+}
+
+export function supportedStrokeAdd(at: Coordinate, target: FaceTarget, strokeStart: ReadonlySet<string>): boolean {
+  if (target.face === 'floor') return at.y === 0
+  return strokeStart.has(coordinateKey({ x: at.x - target.normal.x, y: at.y - target.normal.y, z: at.z - target.normal.z }))
 }

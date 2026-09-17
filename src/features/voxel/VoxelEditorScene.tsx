@@ -3,7 +3,8 @@ import { Canvas, useThree } from '@react-three/fiber'
 import { Edges, OrbitControls } from '@react-three/drei'
 import { MOUSE, TOUCH, Vector3, type InstancedMesh, type PerspectiveCamera } from 'three'
 import { coordinateKey, DEFAULT_VOXEL_SIZE, type BrushMode, type Coordinate, type EditMode, type Voxel, type VoxelModel, type VoxelSize } from './model'
-import { pickFaceTarget, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview, strokeCoordinates, type StrokeTarget } from './targeting'
+import { createStrokeSnapshotMesh, pickFaceTarget, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview,
+  strokeCoordinates, supportedStrokeAdd, type FaceTarget, type StrokeTarget } from './targeting'
 import { bindPrimaryPointerInput } from './input'
 import { VoxelMesh } from './VoxelMesh'
 
@@ -27,7 +28,8 @@ function EditorScene({ model, size = DEFAULT_VOXEL_SIZE, mode, brushMode, color,
   const voxels = useMemo(() => [...model.values()], [model])
   const latest = useRef({ model, size, voxels, mode, brushMode, color, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel, onRectangle })
   latest.current = { model, size, voxels, mode, brushMode, color, onStrokeStart, onStrokeEdit, onStrokeEnd, onStrokeCancel, onRectangle }
-  const stroke = useRef<{ target: StrokeTarget | null; last: Coordinate; face: string | null; seen: Set<string>; begun: boolean;
+  const stroke = useRef<{ target: StrokeTarget | null; last: Coordinate; face: FaceTarget | null; seen: Set<string>; begun: boolean;
+    snapshotMesh: InstancedMesh | null; snapshotVoxels: readonly Voxel[] | null; snapshotKeys: ReadonlySet<string> | null;
     brushMode: BrushMode; mode: EditMode; color: string } | null>(null)
   const { gl, camera } = useThree()
 
@@ -36,11 +38,15 @@ function EditorScene({ model, size = DEFAULT_VOXEL_SIZE, mode, brushMode, color,
       const { brushMode, mode, color, model, voxels, size } = latest.current
       if (mode === 'camera' || !meshRef.current) return false
       const rect = gl.domElement.getBoundingClientRect()
+      const snapshotVoxels = brushMode === 'stroke' && mode === 'add' ? [...voxels] : null
+      const snapshotMesh = snapshotVoxels ? createStrokeSnapshotMesh(meshRef.current, snapshotVoxels, size) : null
       const target = brushMode === 'rectangle' ? pickStrokeStart(x, y, rect, camera, meshRef.current, voxels, mode, size) : null
-      const face = brushMode === 'stroke' ? pickFaceTarget(x, y, rect, camera, meshRef.current, voxels, mode, size) : null
+      const face = brushMode === 'stroke' ? pickFaceTarget(x, y, rect, camera, snapshotMesh ?? meshRef.current,
+        snapshotVoxels ?? voxels, mode, size) : null
       const start = target?.at ?? face?.at
       if (!start) return false
-      stroke.current = { target, last: start, face: face?.face ?? null, seen: new Set(), begun: false, brushMode, mode, color }
+      stroke.current = { target, last: start, face, seen: new Set(), begun: false, brushMode, mode, color,
+        snapshotMesh, snapshotVoxels, snapshotKeys: snapshotVoxels ? new Set(snapshotVoxels.map(coordinateKey)) : null }
       if (target) setPreview(rectanglePreview(start, start, target.lockedAxis, model, mode, color, size))
       return true
     },
@@ -56,17 +62,20 @@ function EditorScene({ model, size = DEFAULT_VOXEL_SIZE, mode, brushMode, color,
           latest.current.model, active.mode, active.color, latest.current.size))
         return
       }
-      const face = pickFaceTarget(x, y, gl.domElement.getBoundingClientRect(), camera, meshRef.current!,
-        latest.current.voxels, active.mode, latest.current.size)
+      const face = pickFaceTarget(x, y, gl.domElement.getBoundingClientRect(), camera, active.snapshotMesh ?? meshRef.current!,
+        active.snapshotVoxels ?? latest.current.voxels, active.mode, latest.current.size)
       if (!face) return
       if (!active.begun) { latest.current.onStrokeStart(); active.begun = true }
-      // Interpolate only along one face/slice; crossing an edge must not fill through the model.
-      const cells = strokeCoordinates({ at: active.last, face: active.face ?? '' }, face)
-      for (const coordinate of [active.last, ...cells]) {
-        const key = coordinateKey(coordinate)
-        if (!active.seen.has(key)) { active.seen.add(key); latest.current.onStrokeEdit(coordinate, active.mode, active.color) }
+      // Interpolate on one face only; Add candidates must be backed by the stroke-start structure.
+      const previous = active.face!
+      const candidates = [previous, ...strokeCoordinates(previous, face).map(at => ({ ...face, at }))]
+      for (const candidate of candidates) {
+        const key = coordinateKey(candidate.at)
+        if (active.seen.has(key) || (active.snapshotKeys && !supportedStrokeAdd(candidate.at, candidate, active.snapshotKeys))) continue
+        active.seen.add(key)
+        latest.current.onStrokeEdit(candidate.at, active.mode, active.color)
       }
-      active.last = face.at; active.face = face.face
+      active.last = face.at; active.face = face
     },
     end: (x, y) => {
       const active = stroke.current

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { BoxGeometry, InstancedMesh, Matrix4, MeshBasicMaterial, PerspectiveCamera, Plane, Vector3 } from 'three'
 import { coordinateKey, deserializeModel, editModel, editRectangle, emptyHistory, historyReducer, HISTORY_LIMIT, inBounds, serializeModel, type VoxelModel } from '../src/features/voxel/model'
-import { cameraPlaneAxis, floorTarget, interpolateCoordinates, pickFaceTarget, pickLockedTarget, pickStrokeStart, rectangleCoordinates, rectanglePreview, strokeCoordinates, voxelPlaneTarget } from '../src/features/voxel/targeting'
+import { cameraPlaneAxis, createStrokeSnapshotMesh, floorTarget, interpolateCoordinates, pickFaceTarget, pickLockedTarget,
+  pickStrokeStart, rectangleCoordinates, rectanglePreview, strokeCoordinates, supportedStrokeAdd, voxelPlaneTarget } from '../src/features/voxel/targeting'
 import { bindPrimaryPointerInput } from '../src/features/voxel/input'
 
 const at = { x: 8, y: 0, z: 8 }
@@ -99,19 +100,18 @@ test('stroke follows the actual voxel face under each sample while rectangle kee
     return pickFaceTarget(250, 250, rect, camera, mesh, [voxel], mode)
   }
   const top = sample(new Vector3(0.5, 20, 0.5), 'add')
-  assert.deepEqual(top, { at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' })
-  assert.deepEqual(sample(new Vector3(20, 8.5, 0.5), 'add'), { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9' })
-  assert.deepEqual(sample(new Vector3(-20, 8.5, 0.5), 'add'), { at: { x: 7, y: 8, z: 8 }, face: 'x:-1:7' })
-  assert.deepEqual(sample(new Vector3(0.5, 8.5, 20), 'add'), { at: { x: 8, y: 8, z: 9 }, face: 'z:1:9' })
-  assert.deepEqual(sample(new Vector3(0.5, 8.5, -20), 'add'), { at: { x: 8, y: 8, z: 7 }, face: 'z:-1:7' })
+  assert.deepEqual(top, { at: { x: 8, y: 9, z: 8 }, face: 'y:1:9', normal: { x: 0, y: 1, z: 0 } })
+  assert.deepEqual(sample(new Vector3(20, 8.5, 0.5), 'add'), { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9', normal: { x: 1, y: 0, z: 0 } })
+  assert.deepEqual(sample(new Vector3(-20, 8.5, 0.5), 'add'), { at: { x: 7, y: 8, z: 8 }, face: 'x:-1:7', normal: { x: -1, y: 0, z: 0 } })
+  assert.deepEqual(sample(new Vector3(0.5, 8.5, 20), 'add'), { at: { x: 8, y: 8, z: 9 }, face: 'z:1:9', normal: { x: 0, y: 0, z: 1 } })
+  assert.deepEqual(sample(new Vector3(0.5, 8.5, -20), 'add'), { at: { x: 8, y: 8, z: 7 }, face: 'z:-1:7', normal: { x: 0, y: 0, z: -1 } })
   assert.deepEqual(sample(new Vector3(20, 8.5, 0.5), 'delete')?.at, { x: 8, y: 8, z: 8 })
   assert.deepEqual(sample(new Vector3(0.5, 8.5, 20), 'paint')?.at, { x: 8, y: 8, z: 8 })
   camera.position.set(20, 8.5, 0.5); camera.lookAt(center); camera.updateMatrixWorld()
   assert.equal(pickStrokeStart(250, 250, rect, camera, mesh, [voxel], 'add')?.lockedAxis, 'x')
-  assert.deepEqual(strokeCoordinates({ at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' },
-    { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9' }), [{ x: 9, y: 8, z: 8 }], 'crossing faces does not draw through the model')
-  assert.deepEqual(strokeCoordinates({ at: { x: 8, y: 9, z: 8 }, face: 'y:1:9' },
-    { at: { x: 11, y: 9, z: 8 }, face: 'y:1:9' }), [
+  assert.deepEqual(strokeCoordinates(top!, { at: { x: 9, y: 8, z: 8 }, face: 'x:1:9', normal: { x: 1, y: 0, z: 0 } }),
+    [{ x: 9, y: 8, z: 8 }], 'crossing faces does not draw through the model')
+  assert.deepEqual(strokeCoordinates(top!, { at: { x: 11, y: 9, z: 8 }, face: 'y:1:9', normal: { x: 0, y: 1, z: 0 } }), [
     { x: 9, y: 9, z: 8 }, { x: 10, y: 9, z: 8 }, { x: 11, y: 9, z: 8 },
   ])
   mesh.setMatrixAt(0, new Matrix4().makeTranslation(7.5, 8.5, 0.5))
@@ -124,6 +124,44 @@ test('stroke follows the actual voxel face under each sample while rectangle kee
   assert.deepEqual(pickFaceTarget(250, 250, rect, camera, mesh, [], 'add')?.at, { x: 8, y: 0, z: 8 })
   assert.equal(pickFaceTarget(250, 250, rect, camera, mesh, [], 'paint'), null)
   mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose()
+})
+test('Add stroke raycasts its starting structure, hugs faces, and does not extrude newly added voxels', () => {
+  const original = { x: 8, y: 8, z: 8, color: brown }
+  const added = { x: 8, y: 9, z: 8, color: brown }
+  const source = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial(), 2)
+  source.count = 1
+  source.setMatrixAt(0, new Matrix4().makeTranslation(0.5, 8.5, 0.5))
+  source.computeBoundingSphere(); source.updateMatrixWorld()
+  const snapshot = createStrokeSnapshotMesh(source, [original], [16, 16, 16])
+  assert.equal(snapshot.count, 1)
+  const camera = new PerspectiveCamera(45, 1, 0.1, 150)
+  const rect = { left: 0, top: 0, width: 500, height: 500 } as DOMRect
+  camera.position.set(0.5, 20, 0.5); camera.lookAt(0.5, 8.5, 0.5); camera.updateMatrixWorld()
+  const sample = (x: number, y: number, mesh: InstancedMesh, voxels: typeof original[]) =>
+    pickFaceTarget(x, y, rect, camera, mesh, voxels, 'add')
+  assert.deepEqual(sample(250, 250, snapshot, [original])?.at, { x: 8, y: 9, z: 8 })
+  source.count = 2
+  source.setMatrixAt(1, new Matrix4().makeTranslation(0.5, 9.5, 0.5))
+  source.computeBoundingSphere(); source.updateMatrixWorld()
+  assert.deepEqual(sample(250, 250, source, [original, added])?.at, { x: 8, y: 10, z: 8 })
+  assert.deepEqual(sample(250, 250, snapshot, [original])?.at, { x: 8, y: 9, z: 8 },
+    'the current stroke still hits the original top after a live voxel is added')
+
+  camera.position.set(10, 13, 3); camera.lookAt(0.5, 8.5, 0.5); camera.updateMatrixWorld()
+  const screen = (point: Vector3) => { const projected = point.project(camera); return [250 * (projected.x + 1), 250 * (1 - projected.y)] }
+  const [topX, topY] = screen(new Vector3(0.5, 9, 0.5))
+  const [sideX, sideY] = screen(new Vector3(1, 8.5, 0.5))
+  const top = sample(topX, topY, snapshot, [original])!
+  const side = sample(sideX, sideY, snapshot, [original])!
+  assert.deepEqual(top.at, { x: 8, y: 9, z: 8 })
+  assert.deepEqual(side.at, { x: 9, y: 8, z: 8 })
+  assert.deepEqual(strokeCoordinates(top, side), [side.at], 'a corner changes face instead of staying on a top plane')
+  const startKeys = new Set([coordinateKey(original), coordinateKey({ ...original, x: 9 })])
+  assert.equal(supportedStrokeAdd(top.at, top, startKeys), true)
+  assert.equal(supportedStrokeAdd(side.at, side, startKeys), true)
+  assert.equal(supportedStrokeAdd({ x: 10, y: 9, z: 8 }, top, startKeys), false,
+    'interpolation cannot place a voxel without original structure directly behind it')
+  source.geometry.dispose(); (source.material as MeshBasicMaterial).dispose()
 })
 test('undo/redo covers add, paint, delete, clear and restore; edits branch history', () => {
   let state = emptyHistory()
